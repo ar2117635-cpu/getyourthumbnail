@@ -21,7 +21,15 @@ export default function TestAI() {
         body: JSON.stringify({ description })
       });
 
-      const data = await response.json();
+      const raw = await response.text();
+
+let data;
+
+try {
+  data = JSON.parse(raw);
+} catch {
+  throw new Error("Server response: " + raw.slice(0, 1000));
+}
 
       if (!response.ok) {
         throw new Error(data.error || "AI request failed");
