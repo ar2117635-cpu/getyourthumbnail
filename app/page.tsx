@@ -40,27 +40,45 @@ export default function Home() {
     setSummary("");
     setError("");
   }
+  
+async function waitForSeek(video: HTMLVideoElement) {
+  return new Promise<void>((resolve, reject) => {
+    let finished = false;
 
-  async function waitForSeek(video: HTMLVideoElement) {
-    return new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        cleanup();
-        reject(new Error("Video frame loading timed out."));
-      }, 12000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener("seeked", done);
+      video.removeEventListener("error", failed);
+    };
 
-      const cleanup = () => {
-        clearTimeout(timer);
-        video.removeEventListener("seeked", done);
-      };
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve();
+    };
 
-      const done = () => {
-        cleanup();
-        resolve();
-      };
+    const failed = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error("Video could not load the requested frame. Try another MP4 video."));
+    };
 
-      video.addEventListener("seeked", done, { once: true });
-    });
-  }
+    const timer = window.setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error("Video is taking too long to load frames. Try a smaller MP4 video."));
+    }, 30000);
+
+    video.addEventListener("seeked", done, { once: true });
+    video.addEventListener("error", failed, { once: true });
+  });
+}
+  
+
+  
 
   async function analyzeVideo() {
     const video = videoRef.current;
