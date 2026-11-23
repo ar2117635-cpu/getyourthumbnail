@@ -17,22 +17,86 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const description = String(body.description || "").trim();
+    const frames = body.frames;
 
-    if (!description || description.length > 5000) {
+    if (!Array.isArray(frames) || frames.length < 2 || frames.length > 8) {
       return NextResponse.json(
-        { error: "Enter a description up to 5000 characters." },
+        { error: "Please provide 2 to 8 video frames." },
         { status: 400 }
       );
     }
 
+    let totalSize = 0;
+
+    const imageParts = frames.map((frame: any) => {
+      if (
+        typeof frame !== "string" ||
+        !frame.startsWith("data:image/jpeg;base64,")
+      ) {
+        throw new Error("Invalid video frame format.");
+      }
+
+      const data = frame.split(",")[1];
+      totalSize += data.length;
+
+      return {
+        inline_data: {
+          mime_type: "image/jpeg",
+          data
+        }
+      };
+    });
+
+    if (totalSize > 4_000_000) {
+      return NextResponse.json(
+        { error: "Frames are too large. Please use a shorter video." },
+        { status: 413 }
+      );
+    }
+
+    const prompt = `
+You are the professional AI thumbnail director of GetYourThumbnail.
+
+Analyze these frames sampled from one video in chronological order.
+
+${description ? `Additional video description: ${description}` : ""}
+
+Understand the characters, actions, setting, story and most exciting moments.
+
+Create exactly 4 visually different, high-click-through-rate YouTube thumbnail concepts.
+
+Concept styles:
+1. Extreme cinematic action
+2. Emotional close-up
+3. Mystery and unexpected moment
+4. Premium cinematic poster
+
+Keep the concepts faithful to the actual video.
+Do not invent characters or events that are not supported by the frames.
+
+Return ONLY valid JSON:
+{
+  "video_summary": "Short summary of the video",
+  "concepts": [
+    {
+      "headline": "2-5 words",
+      "visual_scene": "Detailed scene",
+      "emotion": "Main emotion",
+      "color_style": "Colors and lighting",
+      "image_prompt": "Detailed cinematic image generation prompt"
+    }
+  ]
+}
+`;
+
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 40000);
+    const timeout = setTimeout(() => controller.abort(), 50000);
 
     let response: Response;
 
     try {
       response = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
         {
           method: "POST",
           headers: {
@@ -40,25 +104,19 @@ export async function POST(request: Request) {
             "x-goog-api-key": apiKey
           },
           body: JSON.stringify({
-            model: "gemini-3.8-flash",
-            input: `Create exactly 4 different high-CTR YouTube thumbnail concepts for this video:
-
-${description}
-
-Return ONLY valid JSON in this exact structure:
-{
-  "concepts": [
-    {
-      "headline": "2-5 words",
-      "visual_scene": "Detailed scene",
-      "emotion": "Main emotion",
-      "color_style": "Colors and lighting",
-      "image_prompt": "Detailed cinematic image prompt"
-    }
-  ]
-}
-
-All 4 concepts must be visually different.`
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: prompt },
+                  ...imageParts
+                ]
+              }
+            ],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.8
+            }
           }),
           signal: controller.signal,
           cache: "no-store"
@@ -74,7 +132,7 @@ All 4 concepts must be visually different.`
       return NextResponse.json(
         {
           error: `Gemini API returned ${response.status}`,
-          details: raw.slice(0, 1500)
+          details: raw.slice(0, 1200)
         },
         { status: 502 }
       );
@@ -82,22 +140,17 @@ All 4 concepts must be visually different.`
 
     const data = JSON.parse(raw);
 
-    const outputText =
-      data.output_text ||
-      (data.steps || [])
-        .filter((step: any) => step.type === "model_output")
-        .flatMap((step: any) => step.content || [])
-        .filter((item: any) => item.type === "text")
-        .map((item: any) => item.text)
-        .join("\n");
+    const outputText = data.candidates?.[0]?.content?.parts
+      ?.map((part: any) => part.text || "")
+      .join("\n");
 
     if (!outputText) {
-      throw new Error("Gemini returned no text.");
+      throw new Error("Gemini returned no analysis.");
     }
 
     const cleaned = outputText
       .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/, "")
+      .replace(/^```\s*/i, "")
       .replace(/\s*```$/, "")
       .trim();
 
@@ -112,11 +165,12 @@ All 4 concepts must be visually different.`
 
     return NextResponse.json({
       success: true,
+      video_summary: result.video_summary || "",
       concepts: result.concepts
     });
 
   } catch (error) {
-    console.error("GetYourThumbnail error:", error);
+    console.error("GetYourThumbnail AI error:", error);
 
     return NextResponse.json(
       {
