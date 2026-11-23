@@ -5,104 +5,102 @@ import React, { useRef, useState } from "react";
 
 type Concept = {
   title: string;
-  text: string;
-  imagePrompt: string;
+  description: string;
+  prompt: string;
   image?: string;
 };
 
 export default function Home() {
+  const fileInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
-  const [video, setVideo] = useState<File | null>(null);
-  const [videoUrl, setVideoUrl] = useState("");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoURL, setVideoURL] = useState("");
   const [description, setDescription] = useState("");
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [selected, setSelected] = useState(0);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const [message, setMessage] = useState("");
+  const [overlayText, setOverlayText] = useState("EPIC MOMENT!");
+  const [fontSize, setFontSize] = useState("48");
 
   function uploadVideo(file?: File) {
     if (!file) return;
 
     if (!file.type.startsWith("video/")) {
-      setError("Please select a video file.");
+      setError("Please select a valid video file.");
       return;
     }
 
     if (file.size > 100 * 1024 * 1024) {
-      setError("Video must be smaller than 100 MB.");
+      setError("Please select a video smaller than 100 MB.");
       return;
     }
 
-    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    if (videoURL) URL.revokeObjectURL(videoURL);
 
-    setVideo(file);
-    setVideoUrl(URL.createObjectURL(file));
+    setVideoFile(file);
+    setVideoURL(URL.createObjectURL(file));
     setConcepts([]);
     setError("");
-    setStatus("Video uploaded successfully.");
+    setMessage("Video uploaded successfully.");
   }
 
   async function analyzeVideo() {
-    const videoElement = videoRef.current;
+    const video = videoRef.current;
     const canvas = canvasRef.current;
 
-    if (!video || !videoElement || !canvas) {
+    if (!videoFile || !video || !canvas) {
       setError("Please upload a video first.");
       return;
     }
 
     setLoading(true);
     setError("");
-    setStatus("Preparing video frames...");
+    setMessage("Analyzing your video...");
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        if (videoElement.readyState >= 2) {
-          resolve();
-          return;
-        }
-
-        videoElement.onloadeddata = () => resolve();
-        videoElement.onerror = () => reject(new Error("Video could not load."));
-        videoElement.load();
-      });
+      if (video.readyState < 2) {
+        await new Promise<void>((resolve, reject) => {
+          video.onloadeddata = () => resolve();
+          video.onerror = () => reject(new Error("Video could not load."));
+          video.load();
+        });
+      }
 
       const context = canvas.getContext("2d");
-
-      if (!context) throw new Error("Canvas is unavailable.");
+      if (!context) throw new Error("Canvas is not available.");
 
       canvas.width = 640;
       canvas.height = 360;
 
-      const duration = videoElement.duration;
+      const duration = video.duration;
 
       if (!Number.isFinite(duration) || duration <= 0) {
-        throw new Error("Video duration could not be detected.");
+        throw new Error("Could not detect video duration.");
       }
 
       const frames: string[] = [];
 
       for (let i = 0; i < 6; i++) {
         const time = Math.min(
-          Math.max(0, (duration * (i + 1)) / 7),
+          (duration * (i + 1)) / 7,
           Math.max(0, duration - 0.2)
         );
 
         await new Promise<void>((resolve, reject) => {
           const timeout = window.setTimeout(() => {
             cleanup();
-            reject(new Error("Video frame loading timed out. Try another MP4."));
-          }, 15000);
+            reject(new Error("Video frame timed out. Try another MP4."));
+          }, 20000);
 
           const cleanup = () => {
             clearTimeout(timeout);
-            videoElement.removeEventListener("seeked", done);
-            videoElement.removeEventListener("error", failed);
+            video.removeEventListener("seeked", done);
+            video.removeEventListener("error", failed);
           };
 
           const done = () => {
@@ -112,24 +110,29 @@ export default function Home() {
 
           const failed = () => {
             cleanup();
-            reject(new Error("Could not read video frame."));
+            reject(new Error("Could not read this video frame."));
           };
 
-          videoElement.addEventListener("seeked", done, { once: true });
-          videoElement.addEventListener("error", failed, { once: true });
-          videoElement.currentTime = time;
+          video.addEventListener("seeked", done, { once: true });
+          video.addEventListener("error", failed, { once: true });
+          video.currentTime = time;
         });
 
-        context.drawImage(videoElement, 0, 0, 640, 360);
+        context.drawImage(video, 0, 0, 640, 360);
         frames.push(canvas.toDataURL("image/jpeg", 0.65));
       }
 
-      setStatus("AI is analyzing your video...");
+      setMessage("Sending video frames to AI...");
 
       const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description, frames }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          description,
+          frames,
+        }),
       });
 
       const data = await response.json();
@@ -138,29 +141,32 @@ export default function Home() {
         throw new Error(data.error || "AI analysis failed.");
       }
 
-      const rawConcepts = data.concepts || data.thumbnails || [];
+      const results = data.concepts || data.thumbnails || [];
 
-      if (!Array.isArray(rawConcepts) || rawConcepts.length === 0) {
+      if (!Array.isArray(results) || results.length === 0) {
         throw new Error("AI did not return thumbnail concepts.");
       }
 
-      const formatted = rawConcepts.slice(0, 4).map((item: any, index: number) => ({
-        title: item.title || `Concept ${index + 1}`,
-        text: item.text || item.description || "",
-        imagePrompt:
-          item.imagePrompt ||
-          item.image_prompt ||
-          item.prompt ||
-          item.description ||
-          description,
-      }));
+      const formatted: Concept[] = results.slice(0, 4).map(
+        (item: any, index: number) => ({
+          title: item.title || `Thumbnail Concept ${index + 1}`,
+          description:
+            item.description || item.text || "AI generated thumbnail idea.",
+          prompt:
+            item.imagePrompt ||
+            item.image_prompt ||
+            item.prompt ||
+            item.description ||
+            description,
+        })
+      );
 
       setConcepts(formatted);
       setSelected(0);
-      setStatus("Analysis complete. Choose a concept.");
+      setMessage("AI analysis completed successfully.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
-      setStatus("");
+      setMessage("");
     } finally {
       setLoading(false);
     }
@@ -168,19 +174,20 @@ export default function Home() {
 
   async function generateImage() {
     const concept = concepts[selected];
-
     if (!concept) return;
 
     setGenerating(true);
     setError("");
-    setStatus("Generating thumbnail...");
+    setMessage("Creating your AI thumbnail...");
 
     try {
       const response = await fetch("/api/generate-image", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          prompt: concept.imagePrompt,
+          prompt: concept.prompt,
           description,
         }),
       });
@@ -198,229 +205,435 @@ export default function Home() {
         data.url;
 
       if (!image) {
-        throw new Error("No image was returned by the image API.");
+        throw new Error("Image API did not return an image.");
       }
 
-      setConcepts((previous) =>
-        previous.map((item, index) =>
+      setConcepts((old) =>
+        old.map((item, index) =>
           index === selected ? { ...item, image } : item
         )
       );
 
-      setStatus("Thumbnail generated successfully.");
+      setMessage("Your thumbnail is ready!");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Image generation failed.");
-      setStatus("");
+      setMessage("");
     } finally {
       setGenerating(false);
     }
   }
 
   function downloadThumbnail() {
-    const image = concepts[selected]?.image;
+    const concept = concepts[selected];
 
-    if (!image) {
-      setError("Generate a thumbnail first.");
+    if (!concept) {
+      setError("Please select a thumbnail concept.");
       return;
     }
 
+    if (concept.image) {
+      const link = document.createElement("a");
+      link.href = concept.image;
+      link.download = "getyourthumbnail.png";
+      link.click();
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+
+    if (!canvas || !video || video.readyState < 2) {
+      setError("Please generate a thumbnail first.");
+      return;
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    canvas.width = 1280;
+    canvas.height = 720;
+
+    ctx.drawImage(video, 0, 0, 1280, 720);
+
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(0, 0, 1280, 720);
+
+    ctx.font = `900 ${Number(fontSize)}px Arial`;
+    ctx.textAlign = "center";
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = "#000000";
+    ctx.fillStyle = "#ffffff";
+
+    ctx.strokeText(overlayText, 640, 620);
+    ctx.fillText(overlayText, 640, 620);
+
     const link = document.createElement("a");
-    link.href = image;
     link.download = "getyourthumbnail.png";
+    link.href = canvas.toDataURL("image/png");
     link.click();
   }
 
   const current = concepts[selected];
 
   return (
-    <main className="min-h-screen bg-[#080914] text-white">
-      <header className="border-b border-white/10 px-5 py-5">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <h1 className="text-2xl font-black tracking-tight">
-            GetYour<span className="text-violet-400">Thumbnail</span>
-          </h1>
-          <span className="rounded-full border border-violet-400/30 px-4 py-2 text-xs text-violet-300">
-            AI THUMBNAIL STUDIO
-          </span>
-        </div>
-      </header>
+    <main>
+      <div className="wrap">
+        <nav className="nav">
+          <a href="#" className="brand">
+            <span className="brand-icon">✦</span>
+            GetYour<span className="gradient-text">Thumbnail</span>
+          </a>
 
-      <section className="mx-auto max-w-7xl px-5 py-12">
-        <div className="mb-10 text-center">
-          <p className="mb-3 text-sm font-bold tracking-[0.3em] text-violet-400">
-            CREATE. DESIGN. GROW.
-          </p>
-          <h2 className="text-4xl font-black md:text-6xl">
-            Create Thumbnails That
-            <span className="block text-violet-400">Get More Clicks.</span>
-          </h2>
-          <p className="mx-auto mt-5 max-w-2xl text-gray-400">
-            Upload your video, let AI analyze the best moments, and create
-            powerful thumbnail concepts.
-          </p>
-        </div>
+          <div className="nav-links">
+            <a href="#studio">Studio</a>
+            <a href="#how">How It Works</a>
+            <a href="#pricing">Pricing</a>
+          </div>
 
-        <div className="grid gap-7 lg:grid-cols-2">
-          <section className="rounded-3xl border border-white/10 bg-[#111225] p-6">
-            <h3 className="mb-5 text-xl font-bold">1. Upload Your Video</h3>
-
-            <input
-              ref={fileRef}
-              type="file"
-              accept="video/*"
-              className="hidden"
-              onChange={(event) => uploadVideo(event.target.files?.[0])}
-            />
-
+          <div className="nav-actions">
+            <a href="#studio" className="btn btn-primary small">
+              Open Studio ↗
+            </a>
             <button
-              onClick={() => fileRef.current?.click()}
-              className="w-full rounded-2xl border-2 border-dashed border-violet-400/40 bg-violet-400/5 p-10 text-center hover:bg-violet-400/10"
+              className="mobile-toggle"
+              onClick={() => document.querySelector(".nav-links")?.classList.toggle("open")}
             >
-              <div className="mb-3 text-4xl">↑</div>
-              <div className="font-bold">Choose Video</div>
-              <div className="mt-2 text-sm text-gray-400">
-                MP4, MOV and other video formats · Max 100 MB
-              </div>
+              ☰
             </button>
+          </div>
+        </nav>
 
-            {video && (
-              <div className="mt-5">
-                <video
-                  ref={videoRef}
-                  src={videoUrl}
-                  controls
-                  playsInline
-                  preload="auto"
-                  className="max-h-64 w-full rounded-xl bg-black"
-                />
-                <p className="mt-2 break-all text-sm text-gray-400">
-                  {video.name}
-                </p>
-              </div>
-            )}
-
-            <div className="mt-6">
-              <label className="mb-2 block text-sm font-bold">
-                Describe Your Thumbnail (Optional)
-              </label>
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="Example: Make an exciting gaming thumbnail with a dramatic action scene..."
-                className="min-h-28 w-full rounded-xl border border-white/10 bg-[#080914] p-4 text-sm outline-none focus:border-violet-400"
-              />
+        <section className="hero">
+          <div className="hero-copy">
+            <div className="eyebrow">
+              <span className="pulse" />
+              AI POWERED THUMBNAIL CREATION
             </div>
 
-            <button
-              onClick={analyzeVideo}
-              disabled={!video || loading}
-              className="mt-6 w-full rounded-xl bg-violet-600 px-5 py-4 font-bold hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loading ? "Analyzing Video..." : "Analyze Video With AI"}
-            </button>
+            <h1>
+              Turn Videos Into
+              <span className="gradient-text"> Click-Worthy</span>
+              Thumbnails.
+            </h1>
 
-            <p className="mt-3 text-center text-xs text-gray-500">
-              AI will study video frames and suggest four concepts.
+            <p className="hero-sub">
+              Upload your video. Let AI discover the best moments and
+              transform them into powerful thumbnail concepts designed
+              to capture attention.
             </p>
 
-            {status && (
-              <p className="mt-4 text-center text-sm text-green-400">
-                {status}
-              </p>
-            )}
+            <div className="hero-buttons">
+              <a href="#studio" className="btn btn-primary">
+                Create Thumbnail →
+              </a>
+              <a href="#how" className="btn btn-ghost">
+                How It Works
+              </a>
+            </div>
 
-            {error && (
-              <p className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-                {error}
-              </p>
-            )}
-          </section>
+            <div className="trust-row">
+              <span>✓ AI Video Analysis</span>
+              <span>✓ 4 Creative Ideas</span>
+              <span>✓ HD Export</span>
+            </div>
+          </div>
 
-          <section className="rounded-3xl border border-white/10 bg-[#111225] p-6">
-            <h3 className="mb-5 text-xl font-bold">2. Thumbnail Studio</h3>
+          <div className="hero-art">
+            <div className="glow glow-one" />
+            <div className="glow glow-two" />
 
-            {concepts.length === 0 ? (
-              <div className="flex min-h-80 flex-col items-center justify-center rounded-2xl border border-white/10 bg-[#080914] p-8 text-center">
-                <div className="mb-4 text-6xl">🎨</div>
-                <h4 className="text-xl font-bold">Your Studio Is Ready</h4>
-                <p className="mt-3 max-w-sm text-sm text-gray-400">
-                  Upload a video and analyze it to see four AI thumbnail ideas
-                  here.
-                </p>
+            <div className="mock-window">
+              <div className="mock-top">
+                <div className="dots"><i /><i /><i /></div>
+                <span>THUMBNAIL PREVIEW</span>
+                <span className="live-tag">● LIVE</span>
               </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 gap-3">
-                  {concepts.map((concept, index) => (
+
+              <div className="mock-image">
+                <div className="mock-sun" />
+                <div className="mock-mountain m1" />
+                <div className="mock-mountain m2" />
+                <div className="mock-copy">
+                  <small>THE ULTIMATE MOMENT</small>
+                  <strong>INSANE!</strong>
+                  <em>AI THUMBNAIL STUDIO</em>
+                </div>
+              </div>
+
+              <div className="mock-bottom">
+                <span>✦ AI DESIGN ENGINE</span>
+                <span className="mock-pill">1280 × 720</span>
+              </div>
+            </div>
+
+            <div className="float-card">
+              <div className="float-icon">✓</div>
+              <div>
+                <b>AI Concepts Ready</b>
+                <small>Creative thumbnail ideas</small>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="stats">
+          <div><b>AI Powered</b><span>Video Analysis</span></div>
+          <div><b>4 Concepts</b><span>Creative Directions</span></div>
+          <div><b>1280 × 720</b><span>HD Thumbnail Export</span></div>
+          <div><b>Fast Workflow</b><span>Simple Creation</span></div>
+        </section>
+      </div>
+
+      <section className="studio-section" id="studio">
+        <div className="wrap">
+          <div className="section-heading">
+            <div className="eyebrow">YOUR CREATIVE WORKSPACE</div>
+            <h2>AI Thumbnail <span className="gradient-text">Studio</span></h2>
+            <p>Upload your video and let AI find your next winning thumbnail idea.</p>
+          </div>
+
+          <div className="studio-grid">
+            <div className="panel">
+              <div className="panel-title">
+                <span className="step">01</span>
+                <div>
+                  <h3>Upload Your Video</h3>
+                  <p>Choose the video you want to turn into a thumbnail.</p>
+                </div>
+              </div>
+
+              <div
+                className="dropzone"
+                onClick={() => fileInput.current?.click()}
+              >
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept="video/*"
+                  onChange={(e) => uploadVideo(e.target.files?.[0])}
+                />
+
+                <div className="upload-icon">↑</div>
+                <b>{videoFile ? videoFile.name : "Drop your video here or browse"}</b>
+                <span>Click to upload your video</span>
+                <small>MP4, MOV, WEBM · Maximum 100 MB</small>
+              </div>
+
+              {videoURL && (
+                <div className="video-box">
+                  <video
+                    ref={videoRef}
+                    src={videoURL}
+                    controls
+                    playsInline
+                    preload="auto"
+                  />
+                  <button
+                    className="btn btn-ghost small"
+                    onClick={() => {
+                      if (videoURL) URL.revokeObjectURL(videoURL);
+                      setVideoURL("");
+                      setVideoFile(null);
+                      setConcepts([]);
+                    }}
+                  >
+                    Remove Video ×
+                  </button>
+                </div>
+              )}
+
+              <div className="usage">
+                <span>Video Analysis</span>
+                <b>{loading ? "Processing..." : videoFile ? "Ready" : "Waiting for upload"}</b>
+              </div>
+
+              <div className="usage-track">
+                <i style={{ width: loading ? "65%" : videoFile ? "35%" : "0%" }} />
+              </div>
+
+              <label className="fine-print">
+                Describe your video or thumbnail idea (optional)
+              </label>
+
+              <div className="edit-controls">
+                <input
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Example: Gaming, action, cinematic..."
+                />
+              </div>
+
+              <button
+                className="btn btn-primary full generate-btn"
+                onClick={analyzeVideo}
+                disabled={!videoFile || loading}
+              >
+                {loading ? "◌ Analyzing Video..." : "✦ Analyze Video With AI"}
+              </button>
+
+              <p className="fine-print" style={{ marginTop: 12 }}>
+                AI analyzes selected video frames to create thumbnail concepts.
+              </p>
+
+              {message && <div className="notice">{message}</div>}
+              {error && (
+                <div className="notice" style={{ color: "#fca5a5" }}>
+                  {error}
+                </div>
+              )}
+            </div>
+
+            <div className="panel">
+              <div className="panel-title">
+                <span className="step">02</span>
+                <div>
+                  <h3>Thumbnail Creator</h3>
+                  <p>Choose a concept, generate and download your design.</p>
+                </div>
+              </div>
+
+              {concepts.length === 0 ? (
+                <div className="empty-result">
+                  <div className="empty-icon">✦</div>
+                  <b>Your Thumbnail Will Appear Here</b>
+                  <span>
+                    Upload a video and click Analyze Video With AI.
+                    Your creative concepts will appear here.
+                  </span>
+                  <div className="empty-preview">
+                    <div /><div /><div />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="design-tabs">
+                    {concepts.map((item, index) => (
+                      <button
+                        key={index}
+                        className={selected === index ? "selected" : ""}
+                        onClick={() => setSelected(index)}
+                      >
+                        Concept {index + 1}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="canvas-wrap">
+                    {current?.image ? (
+                      <img
+                        src={current.image}
+                        alt="AI generated thumbnail"
+                        style={{ width: "100%", display: "block" }}
+                      />
+                    ) : (
+                      <canvas
+                        ref={canvasRef}
+                        width={1280}
+                        height={720}
+                        className="hide"
+                      />
+                    )}
+
+                    {!current?.image && (
+                      <div className="empty-result">
+                        <div className="empty-icon">▧</div>
+                        <b>{current?.title}</b>
+                        <span>{current?.description}</span>
+                        <span>Generate your image using the button below.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="edit-controls">
+                    <label>
+                      Thumbnail Text
+                      <input
+                        value={overlayText}
+                        onChange={(e) => setOverlayText(e.target.value)}
+                        placeholder="Enter thumbnail text"
+                      />
+                    </label>
+
+                    <label>
+                      Text Size
+                      <input
+                        type="number"
+                        min="20"
+                        max="100"
+                        value={fontSize}
+                        onChange={(e) => setFontSize(e.target.value)}
+                      />
+                    </label>
+
                     <button
-                      key={index}
-                      onClick={() => setSelected(index)}
-                      className={`rounded-xl border p-3 text-left ${
-                        selected === index
-                          ? "border-violet-400 bg-violet-400/10"
-                          : "border-white/10 bg-[#080914]"
-                      }`}
+                      className="btn btn-primary full"
+                      onClick={generateImage}
+                      disabled={generating}
                     >
-                      <div className="mb-2 text-xs font-bold text-violet-300">
-                        CONCEPT {index + 1}
-                      </div>
-                      <div className="font-bold">{concept.title}</div>
-                      <p className="mt-2 line-clamp-3 text-xs text-gray-400">
-                        {concept.text}
-                      </p>
+                      {generating ? "Generating Image..." : "✦ Generate AI Thumbnail"}
                     </button>
-                  ))}
-                </div>
 
-                <div className="mt-5 overflow-hidden rounded-xl border border-white/10 bg-[#080914]">
-                  {current?.image ? (
-                    <img
-                      src={current.image}
-                      alt="Generated thumbnail"
-                      className="aspect-video w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex aspect-video items-center justify-center text-center text-gray-500">
-                      <div>
-                        <div className="mb-3 text-5xl">🖼️</div>
-                        <p>Your generated thumbnail will appear here.</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-4">
-                  <h4 className="font-bold">{current?.title}</h4>
-                  <p className="mt-2 text-sm text-gray-400">
-                    {current?.text}
-                  </p>
-                </div>
-
-                <button
-                  onClick={generateImage}
-                  disabled={generating}
-                  className="mt-5 w-full rounded-xl bg-violet-600 px-5 py-4 font-bold hover:bg-violet-500 disabled:opacity-50"
-                >
-                  {generating ? "Generating..." : "Generate AI Thumbnail"}
-                </button>
-
-                <button
-                  onClick={downloadThumbnail}
-                  className="mt-3 w-full rounded-xl border border-white/15 px-5 py-4 font-bold hover:bg-white/5"
-                >
-                  Download Thumbnail PNG
-                </button>
-              </>
-            )}
-          </section>
-        </div>
-
-        <div className="mt-8 text-center text-xs text-gray-500">
-          GetYourThumbnail · AI-powered thumbnail creation studio
+                    <button
+                      className="btn btn-ghost full"
+                      onClick={downloadThumbnail}
+                    >
+                      ↓ Download Thumbnail PNG
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </section>
 
-      <canvas ref={canvasRef} className="hidden" />
-    </main>
-  );
-                               }
+      <section className="how-section wrap" id="how">
+        <div className="section-heading">
+          <div className="eyebrow">SIMPLE CREATION PROCESS</div>
+          <h2>How It <span className="gradient-text">Works</span></h2>
+          <p>Three simple steps to start creating better thumbnails.</p>
+        </div>
+
+        <div className="steps">
+          <article>
+            <span>01</span>
+            <div>↑</div>
+            <h3>Upload Your Video</h3>
+            <p>Choose your video and tell us what kind of thumbnail you want.</p>
+          </article>
+
+          <article>
+            <span>02</span>
+            <div>✦</div>
+            <h3>AI Finds The Ideas</h3>
+            <p>AI studies video frames and creates four creative thumbnail concepts.</p>
+          </article>
+
+          <article>
+            <span>03</span>
+            <div>↓</div>
+            <h3>Generate & Download</h3>
+            <p>Generate your selected design and download your thumbnail.</p>
+          </article>
+        </div>
+      </section>
+
+      <section className="pricing-section" id="pricing">
+        <div className="wrap pricing-inner">
+          <div>
+            <div className="eyebrow">START CREATING TODAY</div>
+            <h2>Make Every Thumbnail <span className="gradient-text">Count.</span></h2>
+            <p>
+              Start exploring AI-powered thumbnail creation.
+              Build your next design with GetYourThumbnail.
+            </p>
+          </div>
+
+          <div className="price-card">
+            <div className="price-label">CREATOR STUDIO</div>
+            <div className="price">Free <small>/ Starter</small></div>
+            <ul>
+              <li>✓ Video upload</li>
+              <li>✓ AI video analysis</li>
+              <li>✓ Four thumbnail concepts</li>
+              <li>✓ T
