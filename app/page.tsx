@@ -3,6 +3,14 @@
 
 import React, { useRef, useState } from "react";
 
+type Concept = {
+  headline: string;
+  visual_scene: string;
+  emotion: string;
+  color_style: string;
+  image_prompt: string;
+};
+
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,6 +21,12 @@ export default function Home() {
   const [design, setDesign] = useState(1);
   const [captured, setCaptured] = useState(false);
 
+  const [description, setDescription] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState("");
+  const [summary, setSummary] = useState("");
+  const [concepts, setConcepts] = useState<Concept[]>([]);
+
   function uploadVideo(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -21,26 +35,13 @@ export default function Home() {
 
     setVideoURL(URL.createObjectURL(file));
     setCaptured(false);
-  }
-
-  function captureFrame() {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas || !video.videoWidth) return;
-
-    canvas.width = 1280;
-    canvas.height = 720;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.drawImage(video, 0, 0, 1280, 720);
-    setCaptured(true);
-    drawText(ctx);
+    setConcepts([]);
+    setSummary("");
+    setAnalysisError("");
   }
 
   function drawText(ctx: CanvasRenderingContext2D) {
-    const gradient = ctx.createLinearGradient(0, 500, 0, 720);
+    const gradient = ctx.createLinearGradient(0, 400, 0, 720);
     gradient.addColorStop(0, "rgba(0,0,0,0)");
     gradient.addColorStop(1, "rgba(0,0,0,0.9)");
 
@@ -74,23 +75,194 @@ export default function Home() {
     }
   }
 
+  function captureFrame() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !video.videoWidth) return;
+
+    canvas.width = 1280;
+    canvas.height = 720;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.drawImage(video, 0, 0, 1280, 720);
+    setCaptured(true);
+    drawText(ctx);
+  }
+
   function updateDesign(value: number) {
     setDesign(value);
 
-    if (captured && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        // Keep the captured background while changing text design.
-        drawText(ctx);
-      }
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+
+    if (captured && video && canvas && ctx && video.videoWidth) {
+      ctx.drawImage(video, 0, 0, 1280, 720);
+
+      const gradient = ctx.createLinearGradient(0, 400, 0, 720);
+      gradient.addColorStop(0, "rgba(0,0,0,0)");
+      gradient.addColorStop(1, "rgba(0,0,0,0.9)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 400, 1280, 320);
     }
+  }
+
+  function updateThumbnailText() {
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const ctx = canvas?.getContext("2d");
+
+    if (!canvas || !ctx || !captured) return;
+
+    if (video && video.videoWidth) {
+      ctx.drawImage(video, 0, 0, 1280, 720);
+    }
+
+    drawText(ctx);
+  }
+
+  function waitForSeek(video: HTMLVideoElement): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("Video frame loading timed out."));
+      }, 12000);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        video.removeEventListener("seeked", onSeeked);
+      };
+
+      const onSeeked = () => {
+        cleanup();
+        resolve();
+      };
+
+      video.addEventListener("seeked", onSeeked, { once: true });
+    });
+  }
+
+  async function analyzeVideo() {
+    const video = videoRef.current;
+
+    if (!video || !video.videoWidth || !video.duration) {
+      setAnalysisError("Please upload a video first.");
+      return;
+    }
+
+    if (video.duration < 1) {
+      setAnalysisError("Please select a video at least 1 second long.");
+      return;
+    }
+
+    setAnalyzing(true);
+    setAnalysisError("");
+    setConcepts([]);
+    setSummary("");
+
+    const originalTime = video.currentTime;
+    const wasPaused = video.paused;
+    const frames: string[] = [];
+
+    try {
+      const sampleCount = 6;
+      const maxTime = Math.max(0, video.duration - 0.2);
+
+      const sampleTimes = Array.from(
+        { length: sampleCount },
+        (_, i) => maxTime * (i / (sampleCount - 1))
+      );
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 640;
+      canvas.height = 360;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Could not prepare video frames.");
+
+      for (const time of sampleTimes) {
+        if (Math.abs(video.currentTime - time) > 0.05) {
+          const seekPromise = waitForSeek(video);
+          video.currentTime = time;
+          await seekPromise;
+        }
+
+        ctx.drawImage(video, 0, 0, 640, 360);
+
+        const frame = canvas.toDataURL("image/jpeg", 0.65);
+        frames.push(frame);
+      }
+
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          description,
+          frames
+        })
+      });
+
+      const raw = await response.text();
+
+      let data: any;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(
+          `Server returned an unexpected response: ${raw.slice(0, 250)}`
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.details || data.error || "AI analysis failed."
+        );
+      }
+
+      if (!Array.isArray(data.concepts) || data.concepts.length !== 4) {
+        throw new Error("AI did not return four concepts.");
+      }
+
+      setSummary(data.video_summary || "");
+      setConcepts(data.concepts);
+
+    } catch (error) {
+      setAnalysisError(
+        error instanceof Error ? error.message : "Something went wrong."
+      );
+    } finally {
+      try {
+        if (Math.abs(video.currentTime - originalTime) > 0.05) {
+          const seekPromise = waitForSeek(video);
+          video.currentTime = originalTime;
+          await seekPromise;
+        }
+      } catch {
+        // Keep the original analysis result even if restoring the video fails.
+      }
+
+      if (!wasPaused) {
+        video.play().catch(() => {});
+      }
+
+      setAnalyzing(false);
+    }
+  }
+
+  function useConcept(concept: Concept) {
+    setHeadline(concept.headline);
+    setSubtitle(concept.emotion);
   }
 
   function downloadThumbnail() {
     const canvas = canvasRef.current;
+
     if (!canvas || !captured) {
-      alert("Please upload a video and capture a frame first.");
+      alert("Please capture a video frame first.");
       return;
     }
 
@@ -101,21 +273,6 @@ export default function Home() {
     link.download = "GetYourThumbnail.png";
     link.href = canvas.toDataURL("image/png");
     link.click();
-  }
-
-  function refreshText() {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    const ctx = canvas?.getContext("2d");
-
-    if (!canvas || !ctx || !captured) return;
-
-    // Re-capture the current video frame before applying new text.
-    if (video && video.videoWidth) {
-      ctx.drawImage(video, 0, 0, 1280, 720);
-    }
-
-    drawText(ctx);
   }
 
   return (
@@ -129,8 +286,8 @@ export default function Home() {
         <p className="eyebrow">YOUR CREATIVE STUDIO</p>
         <h1>Create Thumbnails That <span>Get Clicks.</span></h1>
         <p className="description">
-          Upload a video, choose a frame, customize your design
-          and download your thumbnail.
+          Upload your video, let AI understand its scenes,
+          and create professional thumbnail concepts.
         </p>
       </section>
 
@@ -144,7 +301,7 @@ export default function Home() {
             <small>MP4, MOV or WebM</small>
             <input
               type="file"
-              accept="video/*"
+              accept="video/mp4,video/webm,video/quicktime,video/*"
               onChange={uploadVideo}
             />
           </label>
@@ -155,15 +312,48 @@ export default function Home() {
                 ref={videoRef}
                 src={videoURL}
                 controls
+                playsInline
                 onLoadedMetadata={() => setCaptured(false)}
               />
+
               <button className="primary" onClick={captureFrame}>
                 Capture current frame
               </button>
             </div>
           )}
 
-          <h2>02. Customize thumbnail</h2>
+          <h2>02. AI Video Analyzer</h2>
+
+          <label className="fieldLabel">
+            Optional video description
+          </label>
+
+          <textarea
+            className="textInput descriptionInput"
+            value={description}
+            maxLength={1000}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Tell AI anything important about your video..."
+          />
+
+          <button
+            className="aiButton"
+            onClick={analyzeVideo}
+            disabled={!videoURL || analyzing}
+          >
+            {analyzing ? "AI IS ANALYZING YOUR VIDEO..." : "✦ ANALYZE VIDEO WITH AI"}
+          </button>
+
+          <p className="hint">
+            AI samples 6 frames from your video. Keep the video open while
+            analysis is running.
+          </p>
+
+          {analysisError && (
+            <div className="errorBox">{analysisError}</div>
+          )}
+
+          <h2>03. Customize thumbnail</h2>
 
           <label className="fieldLabel">Main headline</label>
           <input
@@ -181,7 +371,7 @@ export default function Home() {
             onChange={(e) => setSubtitle(e.target.value)}
           />
 
-          <h2>03. Select design</h2>
+          <h2>04. Select design</h2>
 
           <div className="designs">
             <button
@@ -201,7 +391,7 @@ export default function Home() {
 
           <button
             className="secondary"
-            onClick={refreshText}
+            onClick={updateThumbnailText}
             disabled={!captured}
           >
             Update thumbnail text
@@ -224,6 +414,7 @@ export default function Home() {
 
           <div className="canvasWrap">
             <canvas ref={canvasRef} />
+
             {!captured && (
               <div className="empty">
                 <div className="emptyIcon">▶</div>
@@ -234,8 +425,46 @@ export default function Home() {
           </div>
 
           <p className="hint">
-            Tip: Choose a clear, exciting video frame for a better thumbnail.
+            Choose a clear and exciting video frame for your thumbnail.
           </p>
+
+          {summary && (
+            <div className="summaryBox">
+              <h3>AI Video Summary</h3>
+              <p>{summary}</p>
+            </div>
+          )}
+
+          {concepts.length > 0 && (
+            <div className="results">
+              <h2>✦ Your 4 AI Thumbnail Concepts</h2>
+
+              {concepts.map((concept, index) => (
+                <article className="concept" key={index}>
+                  <div className="conceptTop">
+                    <span>CONCEPT 0{index + 1}</span>
+                    <strong>{concept.headline}</strong>
+                  </div>
+
+                  <p><b>Scene:</b> {concept.visual_scene}</p>
+                  <p><b>Emotion:</b> {concept.emotion}</p>
+                  <p><b>Colors:</b> {concept.color_style}</p>
+
+                  <button
+                    className="secondary"
+                    onClick={() => useConcept(concept)}
+                  >
+                    Use this headline
+                  </button>
+
+                  <details>
+                    <summary>View AI image prompt</summary>
+                    <p>{concept.image_prompt}</p>
+                  </details>
+                </article>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -251,7 +480,7 @@ export default function Home() {
           color: #fff;
           font-family: Arial, sans-serif;
         }
-        button, input { font: inherit; }
+        button, input, textarea { font: inherit; }
         .page { min-height: 100vh; padding: 22px 5%; }
         .header {
           display: flex;
@@ -286,7 +515,7 @@ export default function Home() {
           padding: 23px;
           min-width: 0;
         }
-        h2 { font-size: 17px; margin: 5px 0 17px; }
+        h2 { font-size: 17px; margin: 20px 0 17px; }
         .upload {
           display: flex;
           flex-direction: column;
@@ -304,7 +533,12 @@ export default function Home() {
         small, .hint { color: #a6a6bd; font-size: 12px; }
         .videoBox { margin: -12px 0 25px; }
         video { width: 100%; border-radius: 10px; background: #000; }
-        .fieldLabel { display: block; color: #c8c8dc; font-size: 13px; margin: 12px 0 7px; }
+        .fieldLabel {
+          display: block;
+          color: #c8c8dc;
+          font-size: 13px;
+          margin: 12px 0 7px;
+        }
         .textInput {
           width: 100%;
           padding: 13px;
@@ -315,6 +549,10 @@ export default function Home() {
           outline: none;
         }
         .textInput:focus { border-color: #a78bfa; }
+        .descriptionInput {
+          min-height: 85px;
+          resize: vertical;
+        }
         .designs { display: flex; gap: 10px; margin: 12px 0 18px; }
         .design {
           flex: 1;
@@ -325,7 +563,7 @@ export default function Home() {
           color: white;
         }
         .design.active { border-color: #a78bfa; background: #38285c; }
-        .primary, .secondary {
+        .primary, .secondary, .aiButton {
           width: 100%;
           padding: 14px;
           border: 0;
@@ -334,11 +572,24 @@ export default function Home() {
           cursor: pointer;
           margin-top: 12px;
         }
-        .primary { background: linear-gradient(100deg, #7548e8, #a855f7); color: white; }
+        .primary {
+          background: linear-gradient(100deg, #7548e8, #a855f7);
+          color: white;
+        }
         .secondary { background: #282843; color: white; }
+        .aiButton {
+          background: linear-gradient(100deg, #6335d4, #bd45d9);
+          color: white;
+          min-height: 50px;
+        }
         button:disabled { opacity: .45; cursor: not-allowed; }
         .download { margin-top: 10px; }
-        .previewHeading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+        .previewHeading {
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          align-items: center;
+        }
         .previewHeading span { color: #a6a6bd; font-size: 11px; }
         .canvasWrap {
           position: relative;
@@ -375,14 +626,65 @@ export default function Home() {
           font-size: 23px;
         }
         .hint { line-height: 1.6; }
-        footer { text-align: center; color: #77778e; padding: 35px 0 15px; font-size: 12px; }
+        .errorBox {
+          margin-top: 15px;
+          padding: 13px;
+          border: 1px solid #9d414b;
+          border-radius: 9px;
+          background: #381c29;
+          color: #ffb5bd;
+          font-size: 13px;
+          overflow-wrap: anywhere;
+        }
+        .summaryBox, .concept {
+          margin-top: 18px;
+          padding: 16px;
+          border: 1px solid #383852;
+          border-radius: 12px;
+          background: #1b1b32;
+          overflow-wrap: anywhere;
+        }
+        .summaryBox h3 { margin: 0 0 10px; font-size: 15px; }
+        .summaryBox p, .concept p {
+          color: #c5c5d8;
+          font-size: 13px;
+          line-height: 1.6;
+        }
+        .conceptTop {
+          display: flex;
+          flex-direction: column;
+          gap: 9px;
+        }
+        .conceptTop span {
+          color: #a78bfa;
+          font-size: 10px;
+          letter-spacing: 2px;
+          font-weight: bold;
+        }
+        .conceptTop strong { font-size: 19px; }
+        details {
+          margin-top: 13px;
+          color: #c5c5d8;
+          font-size: 12px;
+        }
+        summary { cursor: pointer; color: #bca5ff; }
+        footer {
+          text-align: center;
+          color: #77778e;
+          padding: 35px 0 15px;
+          font-size: 12px;
+        }
         @media (max-width: 760px) {
           .studio { grid-template-columns: 1fr; }
-          .header { align-items: flex-start; gap: 10px; flex-direction: column; }
+          .header {
+            align-items: flex-start;
+            gap: 10px;
+            flex-direction: column;
+          }
           .hero { padding: 35px 5px; }
           .panel, .previewPanel { padding: 17px; }
         }
       `}</style>
     </main>
   );
-}
+                                  }
