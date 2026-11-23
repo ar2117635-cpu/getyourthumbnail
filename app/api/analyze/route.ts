@@ -62,5 +62,5 @@ Return valid JSON with a concepts array.`,
       },
       { status: 500 }
     );
-  }
+  }}
   
