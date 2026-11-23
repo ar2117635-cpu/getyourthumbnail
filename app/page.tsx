@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useRef, useState } from "react";
@@ -11,21 +10,23 @@ type Concept = {
   image_prompt: string;
 };
 
+type GeneratedImage = {
+  headline: string;
+  image: string;
+  loading: boolean;
+  error: string;
+};
+
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
   const [videoURL, setVideoURL] = useState("");
-  const [headline, setHeadline] = useState("MAKE YOUR VIDEO VIRAL!");
-  const [subtitle, setSubtitle] = useState("CREATE AMAZING THUMBNAILS");
-  const [design, setDesign] = useState(1);
-  const [captured, setCaptured] = useState(false);
-
   const [description, setDescription] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState("");
+  const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
   const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [images, setImages] = useState<GeneratedImage[]>([]);
+  const [selected, setSelected] = useState(0);
 
   function uploadVideo(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -34,97 +35,14 @@ export default function Home() {
     if (videoURL) URL.revokeObjectURL(videoURL);
 
     setVideoURL(URL.createObjectURL(file));
-    setCaptured(false);
     setConcepts([]);
+    setImages([]);
     setSummary("");
-    setAnalysisError("");
+    setError("");
   }
 
-  function drawText(ctx: CanvasRenderingContext2D) {
-    const gradient = ctx.createLinearGradient(0, 400, 0, 720);
-    gradient.addColorStop(0, "rgba(0,0,0,0)");
-    gradient.addColorStop(1, "rgba(0,0,0,0.9)");
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 400, 1280, 320);
-
-    if (design === 1) {
-      ctx.textAlign = "center";
-      ctx.font = "bold 76px Arial";
-      ctx.lineWidth = 9;
-      ctx.strokeStyle = "#000";
-      ctx.fillStyle = "#FFE600";
-      ctx.strokeText(headline.toUpperCase(), 640, 590, 1160);
-      ctx.fillText(headline.toUpperCase(), 640, 590, 1160);
-
-      ctx.font = "bold 34px Arial";
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillText(subtitle.toUpperCase(), 640, 655, 1100);
-    } else {
-      ctx.textAlign = "left";
-      ctx.font = "bold 72px Arial";
-      ctx.lineWidth = 8;
-      ctx.strokeStyle = "#000";
-      ctx.fillStyle = "#FFFFFF";
-      ctx.strokeText(headline.toUpperCase(), 65, 580, 1120);
-      ctx.fillText(headline.toUpperCase(), 65, 580, 1120);
-
-      ctx.font = "bold 34px Arial";
-      ctx.fillStyle = "#00E5FF";
-      ctx.fillText(subtitle.toUpperCase(), 70, 645, 1100);
-    }
-  }
-
-  function captureFrame() {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas || !video.videoWidth) return;
-
-    canvas.width = 1280;
-    canvas.height = 720;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.drawImage(video, 0, 0, 1280, 720);
-    setCaptured(true);
-    drawText(ctx);
-  }
-
-  function updateDesign(value: number) {
-    setDesign(value);
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-
-    if (captured && video && canvas && ctx && video.videoWidth) {
-      ctx.drawImage(video, 0, 0, 1280, 720);
-
-      const gradient = ctx.createLinearGradient(0, 400, 0, 720);
-      gradient.addColorStop(0, "rgba(0,0,0,0)");
-      gradient.addColorStop(1, "rgba(0,0,0,0.9)");
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 400, 1280, 320);
-    }
-  }
-
-  function updateThumbnailText() {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    const ctx = canvas?.getContext("2d");
-
-    if (!canvas || !ctx || !captured) return;
-
-    if (video && video.videoWidth) {
-      ctx.drawImage(video, 0, 0, 1280, 720);
-    }
-
-    drawText(ctx);
-  }
-
-  function waitForSeek(video: HTMLVideoElement): Promise<void> {
-    return new Promise((resolve, reject) => {
+  async function waitForSeek(video: HTMLVideoElement) {
+    return new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(() => {
         cleanup();
         reject(new Error("Video frame loading timed out."));
@@ -132,15 +50,15 @@ export default function Home() {
 
       const cleanup = () => {
         clearTimeout(timer);
-        video.removeEventListener("seeked", onSeeked);
+        video.removeEventListener("seeked", done);
       };
 
-      const onSeeked = () => {
+      const done = () => {
         cleanup();
         resolve();
       };
 
-      video.addEventListener("seeked", onSeeked, { once: true });
+      video.addEventListener("seeked", done, { once: true });
     });
   }
 
@@ -148,543 +66,612 @@ export default function Home() {
     const video = videoRef.current;
 
     if (!video || !video.videoWidth || !video.duration) {
-      setAnalysisError("Please upload a video first.");
-      return;
-    }
-
-    if (video.duration < 1) {
-      setAnalysisError("Please select a video at least 1 second long.");
+      setError("Please upload and load a video first.");
       return;
     }
 
     setAnalyzing(true);
-    setAnalysisError("");
+    setError("");
     setConcepts([]);
-    setSummary("");
+    setImages([]);
 
     const originalTime = video.currentTime;
     const wasPaused = video.paused;
-    const frames: string[] = [];
 
     try {
-      const sampleCount = 6;
-      const maxTime = Math.max(0, video.duration - 0.2);
-
-      const sampleTimes = Array.from(
-        { length: sampleCount },
-        (_, i) => maxTime * (i / (sampleCount - 1))
-      );
-
       const canvas = document.createElement("canvas");
       canvas.width = 640;
       canvas.height = 360;
 
       const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Could not prepare video frames.");
+      if (!ctx) throw new Error("Cannot prepare video frames.");
 
-      for (const time of sampleTimes) {
+      const frames: string[] = [];
+      const maxTime = Math.max(0, video.duration - 0.2);
+
+      for (let i = 0; i < 6; i++) {
+        const time = maxTime * (i / 5);
+
         if (Math.abs(video.currentTime - time) > 0.05) {
-          const seekPromise = waitForSeek(video);
+          const seeking = waitForSeek(video);
           video.currentTime = time;
-          await seekPromise;
+          await seeking;
         }
 
         ctx.drawImage(video, 0, 0, 640, 360);
-
-        const frame = canvas.toDataURL("image/jpeg", 0.65);
-        frames.push(frame);
+        frames.push(canvas.toDataURL("image/jpeg", 0.65));
       }
 
       const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          description,
-          frames
-        })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description, frames })
       });
 
-      const raw = await response.text();
-
-      let data: any;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        throw new Error(
-          `Server returned an unexpected response: ${raw.slice(0, 250)}`
-        );
-      }
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.details || data.error || "AI analysis failed."
-        );
-      }
-
-      if (!Array.isArray(data.concepts) || data.concepts.length !== 4) {
-        throw new Error("AI did not return four concepts.");
+        throw new Error(data.details || data.error || "AI analysis failed.");
       }
 
       setSummary(data.video_summary || "");
       setConcepts(data.concepts);
 
-    } catch (error) {
-      setAnalysisError(
-        error instanceof Error ? error.message : "Something went wrong."
+      setImages(
+        data.concepts.map((concept: Concept) => ({
+          headline: concept.headline,
+          image: "",
+          loading: false,
+          error: ""
+        }))
       );
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Analysis failed.");
     } finally {
       try {
         if (Math.abs(video.currentTime - originalTime) > 0.05) {
-          const seekPromise = waitForSeek(video);
+          const seeking = waitForSeek(video);
           video.currentTime = originalTime;
-          await seekPromise;
+          await seeking;
         }
-      } catch {
-        // Keep the original analysis result even if restoring the video fails.
-      }
+      } catch {}
 
-      if (!wasPaused) {
-        video.play().catch(() => {});
-      }
-
+      if (!wasPaused) video.play().catch(() => {});
       setAnalyzing(false);
     }
   }
 
-  function useConcept(concept: Concept) {
-    setHeadline(concept.headline);
-    setSubtitle(concept.emotion);
+  async function generateImage(index: number) {
+    const concept = concepts[index];
+    if (!concept) return;
+
+    setSelected(index);
+
+    setImages(old =>
+      old.map((item, i) =>
+        i === index ? { ...item, loading: true, error: "" } : item
+      )
+    );
+
+    try {
+      const response = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: concept.image_prompt,
+          headline: concept.headline
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Image generation failed.");
+      }
+
+      setImages(old =>
+        old.map((item, i) =>
+          i === index
+            ? { ...item, image: data.image, loading: false }
+            : item
+        )
+      );
+
+    } catch (err) {
+      setImages(old =>
+        old.map((item, i) =>
+          i === index
+            ? {
+                ...item,
+                loading: false,
+                error: err instanceof Error ? err.message : "Image failed."
+              }
+            : item
+        )
+      );
+    }
   }
 
-  function downloadThumbnail() {
-    const canvas = canvasRef.current;
-
-    if (!canvas || !captured) {
-      alert("Please capture a video frame first.");
-      return;
-    }
-
-    const ctx = canvas.getContext("2d");
-    if (ctx) drawText(ctx);
+  function downloadImage(index: number) {
+    const image = images[index];
+    if (!image?.image) return;
 
     const link = document.createElement("a");
-    link.download = "GetYourThumbnail.png";
-    link.href = canvas.toDataURL("image/png");
+    link.href = image.image;
+    link.download = `GetYourThumbnail-${index + 1}.png`;
     link.click();
   }
 
   return (
-    <main className="page">
+    <main className="app">
       <header className="header">
-        <div className="logo">GET<span>YOUR</span>THUMBNAIL</div>
-        <div className="tag">AI THUMBNAIL STUDIO</div>
+        <a className="logo" href="/">GET<span>YOUR</span>THUMBNAIL</a>
+        <div className="headerTag">✦ AI CREATIVE STUDIO</div>
       </header>
 
       <section className="hero">
-        <p className="eyebrow">YOUR CREATIVE STUDIO</p>
-        <h1>Create Thumbnails That <span>Get Clicks.</span></h1>
-        <p className="description">
-          Upload your video, let AI understand its scenes,
-          and create professional thumbnail concepts.
+        <div className="pill">YOUR PERSONAL AI THUMBNAIL DESIGNER</div>
+        <h1>Turn Videos Into <span>Viral Thumbnails.</span></h1>
+        <p>
+          Upload your video. Let AI understand the story.
+          Generate cinematic thumbnails made to get clicks.
         </p>
       </section>
 
-      <section className="studio">
-        <div className="panel">
-          <h2>01. Upload your video</h2>
-
-          <label className="upload">
-            <span className="uploadIcon">＋</span>
-            <strong>Choose video</strong>
-            <small>MP4, MOV or WebM</small>
-            <input
-              type="file"
-              accept="video/mp4,video/webm,video/quicktime,video/*"
-              onChange={uploadVideo}
-            />
-          </label>
-
-          {videoURL && (
-            <div className="videoBox">
-              <video
-                ref={videoRef}
-                src={videoURL}
-                controls
-                playsInline
-                onLoadedMetadata={() => setCaptured(false)}
-              />
-
-              <button className="primary" onClick={captureFrame}>
-                Capture current frame
-              </button>
+      <section className="workspace">
+        <div className="left">
+          <div className="card">
+            <div className="sectionTitle">
+              <span>01</span>
+              <div>
+                <h2>Upload your video</h2>
+                <p>Start with your original video.</p>
+              </div>
             </div>
-          )}
 
-          <h2>02. AI Video Analyzer</h2>
+            <label className="upload">
+              <div className="uploadIcon">↑</div>
+              <strong>Choose video file</strong>
+              <small>MP4 · MOV · WebM</small>
+              <input
+                type="file"
+                accept="video/*"
+                onChange={uploadVideo}
+              />
+            </label>
 
-          <label className="fieldLabel">
-            Optional video description
-          </label>
-
-          <textarea
-            className="textInput descriptionInput"
-            value={description}
-            maxLength={1000}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Tell AI anything important about your video..."
-          />
-
-          <button
-            className="aiButton"
-            onClick={analyzeVideo}
-            disabled={!videoURL || analyzing}
-          >
-            {analyzing ? "AI IS ANALYZING YOUR VIDEO..." : "✦ ANALYZE VIDEO WITH AI"}
-          </button>
-
-          <p className="hint">
-            AI samples 6 frames from your video. Keep the video open while
-            analysis is running.
-          </p>
-
-          {analysisError && (
-            <div className="errorBox">{analysisError}</div>
-          )}
-
-          <h2>03. Customize thumbnail</h2>
-
-          <label className="fieldLabel">Main headline</label>
-          <input
-            className="textInput"
-            value={headline}
-            maxLength={55}
-            onChange={(e) => setHeadline(e.target.value)}
-          />
-
-          <label className="fieldLabel">Subtitle</label>
-          <input
-            className="textInput"
-            value={subtitle}
-            maxLength={65}
-            onChange={(e) => setSubtitle(e.target.value)}
-          />
-
-          <h2>04. Select design</h2>
-
-          <div className="designs">
-            <button
-              className={design === 1 ? "design active" : "design"}
-              onClick={() => updateDesign(1)}
-            >
-              Design 01
-            </button>
-
-            <button
-              className={design === 2 ? "design active" : "design"}
-              onClick={() => updateDesign(2)}
-            >
-              Design 02
-            </button>
-          </div>
-
-          <button
-            className="secondary"
-            onClick={updateThumbnailText}
-            disabled={!captured}
-          >
-            Update thumbnail text
-          </button>
-
-          <button
-            className="primary download"
-            onClick={downloadThumbnail}
-            disabled={!captured}
-          >
-            Download PNG ↓
-          </button>
-        </div>
-
-        <div className="previewPanel">
-          <div className="previewHeading">
-            <h2>Live Preview</h2>
-            <span>16:9 · 1280 × 720</span>
-          </div>
-
-          <div className="canvasWrap">
-            <canvas ref={canvasRef} />
-
-            {!captured && (
-              <div className="empty">
-                <div className="emptyIcon">▶</div>
-                <strong>Your thumbnail appears here</strong>
-                <small>Upload a video and capture a frame.</small>
+            {videoURL && (
+              <div className="videoPreview">
+                <video
+                  ref={videoRef}
+                  src={videoURL}
+                  controls
+                  playsInline
+                />
+                <span>VIDEO READY</span>
               </div>
             )}
           </div>
 
-          <p className="hint">
-            Choose a clear and exciting video frame for your thumbnail.
-          </p>
-
-          {summary && (
-            <div className="summaryBox">
-              <h3>AI Video Summary</h3>
-              <p>{summary}</p>
+          <div className="card">
+            <div className="sectionTitle">
+              <span>02</span>
+              <div>
+                <h2>Tell AI about your video</h2>
+                <p>Optional details for better results.</p>
+              </div>
             </div>
-          )}
 
-          {concepts.length > 0 && (
-            <div className="results">
-              <h2>✦ Your 4 AI Thumbnail Concepts</h2>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="Example: A warrior fights a giant dragon in a burning castle..."
+              maxLength={1000}
+            />
 
-              {concepts.map((concept, index) => (
-                <article className="concept" key={index}>
-                  <div className="conceptTop">
-                    <span>CONCEPT 0{index + 1}</span>
-                    <strong>{concept.headline}</strong>
-                  </div>
+            <button
+              className="mainButton"
+              onClick={analyzeVideo}
+              disabled={!videoURL || analyzing}
+            >
+              {analyzing ? "✦ ANALYZING VIDEO..." : "✦ ANALYZE VIDEO WITH AI"}
+            </button>
 
-                  <p><b>Scene:</b> {concept.visual_scene}</p>
-                  <p><b>Emotion:</b> {concept.emotion}</p>
-                  <p><b>Colors:</b> {concept.color_style}</p>
+            {error && <div className="error">{error}</div>}
 
-                  <button
-                    className="secondary"
-                    onClick={() => useConcept(concept)}
-                  >
-                    Use this headline
-                  </button>
+            <p className="note">
+              AI analyzes 6 frames from your video to understand its scenes.
+            </p>
+          </div>
 
-                  <details>
-                    <summary>View AI image prompt</summary>
-                    <p>{concept.image_prompt}</p>
-                  </details>
-                </article>
-              ))}
+          <div className="card info">
+            <div className="sectionTitle">
+              <span>03</span>
+              <div>
+                <h2>Your export settings</h2>
+                <p>Designed for YouTube thumbnails.</p>
+              </div>
             </div>
-          )}
+            <div className="setting">
+              <span>Aspect Ratio</span>
+              <strong>16:9</strong>
+            </div>
+            <div className="setting">
+              <span>Target Resolution</span>
+              <strong>1280 × 720</strong>
+            </div>
+            <div className="setting">
+              <span>Export Format</span>
+              <strong>PNG</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="right">
+          <div className="card resultsCard">
+            <div className="resultsHeading">
+              <div>
+                <div className="eyebrow">AI WORKSPACE</div>
+                <h2>Thumbnail Studio</h2>
+                <p>Your AI-generated design concepts appear here.</p>
+              </div>
+              <div className="magic">✦</div>
+            </div>
+
+            {!concepts.length && (
+              <div className="empty">
+                <div className="emptyArt">
+                  <div className="artIcon">✧</div>
+                  <div className="artLine"></div>
+                  <div className="artLine short"></div>
+                </div>
+                <h3>Your creativity starts here</h3>
+                <p>Upload a video and click Analyze Video With AI.</p>
+              </div>
+            )}
+
+            {summary && (
+              <div className="summary">
+                <strong>AI VIDEO SUMMARY</strong>
+                <p>{summary}</p>
+              </div>
+            )}
+
+            {concepts.length > 0 && (
+              <>
+                <div className="galleryTitle">
+                  <h3>Four thumbnail concepts</h3>
+                  <span>{concepts.length} CONCEPTS</span>
+                </div>
+
+                <div className="conceptGrid">
+                  {concepts.map((concept, index) => (
+                    <article
+                      key={index}
+                      className={selected === index ? "concept active" : "concept"}
+                    >
+                      <div className="conceptNumber">
+                        CONCEPT 0{index + 1}
+                      </div>
+                      <h3>{concept.headline}</h3>
+                      <p>{concept.visual_scene}</p>
+                      <div className="conceptMeta">
+                        <span>Emotion</span>
+                        <strong>{concept.emotion}</strong>
+                      </div>
+                      <button
+                        className="generateButton"
+                        onClick={() => generateImage(index)}
+                        disabled={images[index]?.loading}
+                      >
+                        {images[index]?.loading
+                          ? "GENERATING..."
+                          : images[index]?.image
+                            ? "REGENERATE IMAGE ↻"
+                            : "✦ GENERATE IMAGE"}
+                      </button>
+
+                      {images[index]?.error && (
+                        <div className="error">
+                          {images[index].error}
+                        </div>
+                      )}
+
+                      {images[index]?.image && (
+                        <div className="generated">
+                          <img
+                            src={images[index].image}
+                            alt={concept.headline}
+                          />
+                          <button
+                            className="downloadButton"
+                            onClick={() => downloadImage(index)}
+                          >
+                            ↓ DOWNLOAD IMAGE
+                          </button>
+                        </div>
+                      )}
+
+                      <details>
+                        <summary>View image prompt</summary>
+                        <p>{concept.image_prompt}</p>
+                      </details>
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </section>
 
       <footer>
-        © 2026 GetYourThumbnail · Create. Design. Download.
+        GETYOURTHUMBNAIL · CREATE SOMETHING CLICK-WORTHY
       </footer>
 
       <style jsx global>{`
         * { box-sizing: border-box; }
         body {
           margin: 0;
-          background: #090914;
+          background: #090911;
           color: #fff;
           font-family: Arial, sans-serif;
         }
-        button, input, textarea { font: inherit; }
-        .page { min-height: 100vh; padding: 22px 5%; }
+        button, textarea { font: inherit; }
+        .app { min-height: 100vh; padding: 20px 5%; }
         .header {
+          max-width: 1450px;
+          margin: auto;
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 12px 0 25px;
+          padding: 14px 0 24px;
           border-bottom: 1px solid #28283b;
         }
-        .logo { font-size: 19px; font-weight: 900; }
-        .logo span { color: #a78bfa; }
-        .tag, .eyebrow {
-          color: #a78bfa;
+        .logo {
+          color: white;
+          font-weight: 900;
+          font-size: 20px;
+          text-decoration: none;
+          letter-spacing: -.5px;
+        }
+        .logo span { color: #aa83ff; }
+        .headerTag {
+          color: #bca3ff;
           font-size: 11px;
           letter-spacing: 2px;
           font-weight: bold;
         }
-        .hero { text-align: center; padding: 45px 10px; }
-        .hero h1 { font-size: clamp(30px, 5vw, 54px); margin: 12px 0; }
-        .hero h1 span { color: #a78bfa; }
-        .description { color: #a6a6bd; line-height: 1.6; }
-        .studio {
-          max-width: 1200px;
+        .hero {
+          text-align: center;
+          max-width: 850px;
+          margin: 55px auto 48px;
+        }
+        .pill {
+          display: inline-block;
+          border: 1px solid #49366f;
+          background: #211834;
+          color: #c9b5ff;
+          border-radius: 30px;
+          padding: 9px 15px;
+          font-size: 10px;
+          letter-spacing: 1.6px;
+          font-weight: bold;
+        }
+        .hero h1 {
+          font-size: clamp(34px, 5vw, 61px);
+          line-height: 1.12;
+          margin: 23px 0 15px;
+          letter-spacing: -2px;
+        }
+        .hero h1 span {
+          display: block;
+          color: #ad8aff;
+        }
+        .hero p {
+          color: #a7a6bd;
+          line-height: 1.7;
+          font-size: 15px;
+        }
+        .workspace {
+          max-width: 1450px;
           margin: auto;
           display: grid;
-          grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1.2fr);
-          gap: 24px;
+          grid-template-columns: minmax(280px, .72fr) minmax(0, 1.5fr);
+          gap: 22px;
+          align-items: start;
         }
-        .panel, .previewPanel {
-          background: #141426;
-          border: 1px solid #292940;
-          border-radius: 18px;
-          padding: 23px;
+        .left { display: grid; gap: 18px; }
+        .card {
+          background: #141422;
+          border: 1px solid #2d2b40;
+          border-radius: 17px;
+          padding: 22px;
           min-width: 0;
         }
-        h2 { font-size: 17px; margin: 20px 0 17px; }
-        .upload {
+        .sectionTitle {
           display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 9px;
-          padding: 25px;
-          border: 1px dashed #7770b6;
-          border-radius: 12px;
-          background: #1c1b35;
-          cursor: pointer;
-          margin-bottom: 28px;
+          gap: 13px;
+          align-items: flex-start;
+          margin-bottom: 22px;
         }
-        .upload input { display: none; }
-        .uploadIcon { font-size: 32px; color: #b49aff; }
-        small, .hint { color: #a6a6bd; font-size: 12px; }
-        .videoBox { margin: -12px 0 25px; }
-        video { width: 100%; border-radius: 10px; background: #000; }
-        .fieldLabel {
-          display: block;
-          color: #c8c8dc;
-          font-size: 13px;
-          margin: 12px 0 7px;
-        }
-        .textInput {
-          width: 100%;
-          padding: 13px;
-          border-radius: 9px;
-          border: 1px solid #383852;
-          background: #0d0d1b;
-          color: white;
-          outline: none;
-        }
-        .textInput:focus { border-color: #a78bfa; }
-        .descriptionInput {
-          min-height: 85px;
-          resize: vertical;
-        }
-        .designs { display: flex; gap: 10px; margin: 12px 0 18px; }
-        .design {
-          flex: 1;
-          padding: 13px 5px;
-          border: 1px solid #383852;
-          border-radius: 9px;
-          background: #202039;
-          color: white;
-        }
-        .design.active { border-color: #a78bfa; background: #38285c; }
-        .primary, .secondary, .aiButton {
-          width: 100%;
-          padding: 14px;
-          border: 0;
-          border-radius: 9px;
-          font-weight: bold;
-          cursor: pointer;
-          margin-top: 12px;
-        }
-        .primary {
-          background: linear-gradient(100deg, #7548e8, #a855f7);
-          color: white;
-        }
-        .secondary { background: #282843; color: white; }
-        .aiButton {
-          background: linear-gradient(100deg, #6335d4, #bd45d9);
-          color: white;
-          min-height: 50px;
-        }
-        button:disabled { opacity: .45; cursor: not-allowed; }
-        .download { margin-top: 10px; }
-        .previewHeading {
-          display: flex;
-          justify-content: space-between;
-          gap: 10px;
-          align-items: center;
-        }
-        .previewHeading span { color: #a6a6bd; font-size: 11px; }
-        .canvasWrap {
-          position: relative;
-          width: 100%;
-          aspect-ratio: 16 / 9;
-          background: #090914;
-          border: 1px solid #34344c;
-          border-radius: 12px;
-          overflow: hidden;
+        .sectionTitle > span {
+          width: 34px;
+          height: 34px;
+          flex: 0 0 34px;
+          border-radius: 10px;
+          background: #302248;
           display: grid;
           place-items: center;
+          color: #c7aaff;
+          font-size: 12px;
+          font-weight: bold;
         }
-        canvas { width: 100%; height: 100%; object-fit: contain; }
-        .empty {
-          position: absolute;
-          inset: 0;
+        h2 { font-size: 17px; margin: 0 0 7px; }
+        .sectionTitle p, .resultsHeading p {
+          color: #89899f;
+          font-size: 12px;
+          margin: 0;
+          line-height: 1.5;
+        }
+        .upload {
+          min-height: 165px;
+          border: 1px dashed #66528e;
+          border-radius: 13px;
+          background: #1c1a2d;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 12px;
-          color: #c5c2d8;
-          text-align: center;
-          pointer-events: none;
+          gap: 10px;
+          cursor: pointer;
         }
-        .emptyIcon {
-          width: 55px;
-          height: 55px;
+        .upload input { display: none; }
+        .uploadIcon {
+          width: 45px;
+          height: 45px;
           display: grid;
           place-items: center;
-          border-radius: 50%;
-          background: #30234c;
-          color: #c4a8ff;
-          font-size: 23px;
+          border-radius: 13px;
+          background: #3a285a;
+          color: #c9adff;
+          font-size: 30px;
         }
-        .hint { line-height: 1.6; }
-        .errorBox {
-          margin-top: 15px;
-          padding: 13px;
-          border: 1px solid #9d414b;
-          border-radius: 9px;
-          background: #381c29;
-          color: #ffb5bd;
-          font-size: 13px;
-          overflow-wrap: anywhere;
+        .upload small { color: #89899f; font-size: 11px; }
+        .videoPreview { margin-top: 16px; }
+        video { width: 100%; border-radius: 10px; background: #000; }
+        .videoPreview span {
+          display: block;
+          margin-top: 7px;
+          color: #a98aff;
+          font-size: 10px;
+          letter-spacing: 1px;
         }
-        .summaryBox, .concept {
-          margin-top: 18px;
-          padding: 16px;
-          border: 1px solid #383852;
-          border-radius: 12px;
-          background: #1b1b32;
-          overflow-wrap: anywhere;
-        }
-        .summaryBox h3 { margin: 0 0 10px; font-size: 15px; }
-        .summaryBox p, .concept p {
-          color: #c5c5d8;
+        textarea {
+          display: block;
+          width: 100%;
+          min-height: 115px;
+          resize: vertical;
+          padding: 14px;
+          border-radius: 10px;
+          background: #0c0c17;
+          border: 1px solid #38364c;
+          color: white;
+          outline: none;
           font-size: 13px;
           line-height: 1.6;
         }
-        .conceptTop {
-          display: flex;
-          flex-direction: column;
-          gap: 9px;
+        textarea:focus { border-color: #a98aff; }
+        .mainButton, .generateButton, .downloadButton {
+          width: 100%;
+          border: 0;
+          border-radius: 10px;
+          padding: 15px 10px;
+          margin-top: 14px;
+          cursor: pointer;
+          color: white;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: .6px;
+          background: linear-gradient(100deg, #7046db, #aa55e9);
         }
-        .conceptTop span {
-          color: #a78bfa;
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        .note {
+          color: #85859a;
+          font-size: 11px;
+          line-height: 1.6;
+          margin: 13px 0 0;
+        }
+        .setting {
+          display: flex;
+          justify-content: space-between;
+          border-top: 1px solid #302e42;
+          padding: 13px 0;
+          font-size: 12px;
+        }
+        .setting span { color: #9291a7; }
+        .setting strong { color: #ded8ef; }
+        .resultsCard { padding: 26px; }
+        .resultsHeading {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding-bottom: 20px;
+          border-bottom: 1px solid #302e42;
+        }
+        .eyebrow {
+          color: #b79bff;
           font-size: 10px;
           letter-spacing: 2px;
           font-weight: bold;
+          margin-bottom: 10px;
         }
-        .conceptTop strong { font-size: 19px; }
-        details {
-          margin-top: 13px;
-          color: #c5c5d8;
-          font-size: 12px;
+        .resultsHeading h2 { font-size: 23px; }
+        .magic {
+          width: 46px;
+          height: 46px;
+          display: grid;
+          place-items: center;
+          background: #35244f;
+          color: #d3baff;
+          border-radius: 14px;
+          font-size: 24px;
         }
-        summary { cursor: pointer; color: #bca5ff; }
-        footer {
+        .empty {
+          min-height: 350px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
           text-align: center;
-          color: #77778e;
-          padding: 35px 0 15px;
-          font-size: 12px;
         }
-        @media (max-width: 760px) {
-          .studio { grid-template-columns: 1fr; }
-          .header {
-            align-items: flex-start;
-            gap: 10px;
-            flex-direction: column;
-          }
-          .hero { padding: 35px 5px; }
-          .panel, .previewPanel { padding: 17px; }
+        .emptyArt {
+          width: 190px;
+          height: 125px;
+          border: 1px solid #51406e;
+          border-radius: 14px;
+          background: linear-gradient(140deg, #28203d, #11111d);
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          gap: 12px;
+          transform: rotate(-3deg);
+          margin-bottom: 25px;
         }
-      `}</style>
-    </main>
-  );
-                                  }
+        .artIcon { color: #c5a6ff; font-size: 45px; }
+        .artLine { width: 90px; height: 6px; border-radius: 10px; background: #69518c; }
+        .artLine.short { width: 55px; background: #403652; }
+        .empty h3 { margin: 0 0 9px; }
+        .empty p { color: #88889d; font-size: 12px; }
+        .summary {
+          background: #211a34;
+          border: 1px solid #49366a;
+          border-radius: 12px;
+          padding: 16px;
+          margin: 18px 0;
+        }
+        .summary strong { color: #c5a7ff; font-size: 10px; letter-spacing: 1.5px; }
+        .summary p { color: #d1c9e3; font-size: 13px; line-height: 1.6; }
+        .galleryTitle {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin: 23px 0 15px;
+          gap: 10px;
+        }
+        .galleryTitle h3 { margin: 0; font-size: 16px; }
+        .galleryTitle span { color: #b89aff; font-size: 10px; }
+        .conceptGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .concept {
+          border: 1px solid #363349;
+          background: #1b1a2a;
+          border-radius: 13px;
+          padding: 17px;
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+        .concept.active { border-color: #9165dc; }
+        .conceptNumber { color: #b89aff; font-size: 9px; letter-spacing: 1.5px; font-weight: bold; }
+        .concept h3 { font-size: 19px; m
