@@ -50,11 +50,17 @@ Return valid JSON with a concepts array.`,
     const result = JSON.parse(response.text || "{}");
 
     return NextResponse.json(result);
+
   } catch (error) {
     console.error("Thumbnail analysis error:", error);
+
     return NextResponse.json(
-      { error: "AI analysis failed. Please try again." },
+      {
+        error: error instanceof Error
+          ? error.message
+          : "Unknown AI error"
+      },
       { status: 500 }
     );
   }
-}
+  
