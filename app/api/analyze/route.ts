@@ -1,36 +1,8 @@
 
 import { NextResponse } from "next/server";
-import { GoogleGenAI, Type } from "@google/genai";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-const schema = {
-  type: Type.OBJECT,
-  properties: {
-    concepts: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          headline: { type: Type.STRING },
-          visual_scene: { type: Type.STRING },
-          emotion: { type: Type.STRING },
-          color_style: { type: Type.STRING },
-          image_prompt: { type: Type.STRING }
-        },
-        required: [
-          "headline",
-          "visual_scene",
-          "emotion",
-          "color_style",
-          "image_prompt"
-        ]
-      }
-    }
-  },
-  required: ["concepts"]
-};
 
 export async function POST(request: Request) {
   try {
@@ -38,7 +10,7 @@ export async function POST(request: Request) {
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "GEMINI_API_KEY is missing." },
+        { error: "GEMINI_API_KEY is missing in Vercel." },
         { status: 500 }
       );
     }
@@ -53,61 +25,105 @@ export async function POST(request: Request) {
       );
     }
 
-    const ai = new GoogleGenAI({
-      enterprise: true,
-      apiKey
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 40000);
 
-    const interaction = await ai.interactions.create({
-      model: "gemini-3.8-flash",
-      input: `Create exactly 4 different, high-CTR YouTube thumbnail concepts.
+    let response: Response;
 
-Video description:
+    try {
+      response = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey
+          },
+          body: JSON.stringify({
+            model: "gemini-3.8-flash",
+            input: `Create exactly 4 different high-CTR YouTube thumbnail concepts for this video:
+
 ${description}
 
-For every concept create:
-- headline (2-5 powerful words)
-- visual_scene
-- emotion
-- color_style
-- image_prompt
+Return ONLY valid JSON in this exact structure:
+{
+  "concepts": [
+    {
+      "headline": "2-5 words",
+      "visual_scene": "Detailed scene",
+      "emotion": "Main emotion",
+      "color_style": "Colors and lighting",
+      "image_prompt": "Detailed cinematic image prompt"
+    }
+  ]
+}
 
-Make each concept visually unique.
-Return the four concepts in the required JSON format.`,
-      response_format: schema,
-      store: false
-    });
-
-    const output = interaction.output_text;
-
-    if (!output) {
-      throw new Error("Gemini returned an empty response.");
+All 4 concepts must be visually different.`
+          }),
+          signal: controller.signal,
+          cache: "no-store"
+        }
+      );
+    } finally {
+      clearTimeout(timeout);
     }
 
-    const result = JSON.parse(output);
+    const raw = await response.text();
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          error: `Gemini API returned ${response.status}`,
+          details: raw.slice(0, 1500)
+        },
+        { status: 502 }
+      );
+    }
+
+    const data = JSON.parse(raw);
+
+    const outputText =
+      data.output_text ||
+      (data.steps || [])
+        .filter((step: any) => step.type === "model_output")
+        .flatMap((step: any) => step.content || [])
+        .filter((item: any) => item.type === "text")
+        .map((item: any) => item.text)
+        .join("\n");
+
+    if (!outputText) {
+      throw new Error("Gemini returned no text.");
+    }
+
+    const cleaned = outputText
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/, "")
+      .replace(/\s*```$/, "")
+      .trim();
+
+    const result = JSON.parse(cleaned);
 
     if (
       !Array.isArray(result.concepts) ||
       result.concepts.length !== 4
     ) {
-      throw new Error("Gemini did not return exactly 4 concepts.");
+      throw new Error("AI did not return exactly 4 concepts.");
     }
 
     return NextResponse.json({
       success: true,
-      model: "gemini-3.8-flash",
       concepts: result.concepts
     });
 
   } catch (error) {
-    console.error("GetYourThumbnail API error:", error);
+    console.error("GetYourThumbnail error:", error);
 
     return NextResponse.json(
       {
-        success: false,
-        error: error instanceof Error
-          ? error.message
-          : "Unknown server error"
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown server error"
       },
       { status: 500 }
     );
