@@ -278,6 +278,24 @@ export default function Home() {
                     >
                       Remove video
                     </button>
+                    .seo-grid article {
+  text-align: center;
+}
+
+.seo-grid article button,
+.seo-grid article a {
+  display: inline-block;
+  text-align: center;
+  margin-top: 8px;
+}
+
+.seo-faq {
+  text-align: center;
+}
+
+.seo-faq details {
+  text-align: left;
+                    }
                   </div>
                 )}
 
