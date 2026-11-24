@@ -4,6 +4,12 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const MODEL = "gemini-3.8-flash";
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -28,7 +34,7 @@ export async function POST(request: Request) {
 
     let totalSize = 0;
 
-    const imageParts = frames.map((frame: any) => {
+    const imageParts = frames.map((frame: unknown) => {
       if (
         typeof frame !== "string" ||
         !frame.startsWith("data:image/jpeg;base64,")
@@ -42,8 +48,8 @@ export async function POST(request: Request) {
       return {
         inline_data: {
           mime_type: "image/jpeg",
-          data
-        }
+          data,
+        },
       };
     });
 
@@ -57,95 +63,141 @@ export async function POST(request: Request) {
     const prompt = `
 You are the professional AI thumbnail director of GetYourThumbnail.
 
-Analyze these frames sampled from one video in chronological order.
+Analyze these video frames in chronological order.
 
-${description ? `Additional video description: ${description}` : ""}
+${description ? `Video description: ${description}` : ""}
 
-Understand the characters, actions, setting, story and most exciting moments.
+Understand the characters, actions, setting, story and exciting moments.
 
-Create exactly 4 visually different, high-click-through-rate YouTube thumbnail concepts.
+Create exactly 4 visually different YouTube thumbnail concepts.
 
-Concept styles:
+Styles:
 1. Extreme cinematic action
 2. Emotional close-up
 3. Mystery and unexpected moment
 4. Premium cinematic poster
 
-Keep the concepts faithful to the actual video.
-Do not invent characters or events that are not supported by the frames.
+Keep concepts faithful to the actual video.
+Do not invent characters or events.
 
 Return ONLY valid JSON:
 {
-  "video_summary": "Short summary of the video",
+  "video_summary": "Short summary",
   "concepts": [
     {
       "headline": "2-5 words",
-      "visual_scene": "Detailed scene",
+      "visual_scene": "Detailed visual scene",
       "emotion": "Main emotion",
       "color_style": "Colors and lighting",
-      "image_prompt": "Detailed cinematic image generation prompt"
+      "image_prompt": "Detailed image generation prompt"
     }
   ]
 }
 `;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 50000);
-
-    let response: Response;
-
-    try {
-      response = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+    const requestBody = {
+      contents: [
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  { text: prompt },
-                  ...imageParts
-                ]
-              }
-            ],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.8
-            }
-          }),
-          signal: controller.signal,
-          cache: "no-store"
+          role: "user",
+          parts: [
+            { text: prompt },
+            ...imageParts,
+          ],
+        },
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.8,
+        maxOutputTokens: 3000,
+      },
+    };
+
+    let response: Response | null = null;
+    let raw = "";
+
+    // Retry up to 3 times for temporary server overload.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const controller = new AbortController();
+
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, 15000);
+
+      try {
+        response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+            cache: "no-store",
+          }
+        );
+
+        raw = await response.text();
+
+      } catch (error) {
+        if (attempt === 3) {
+          throw new Error(
+            error instanceof Error
+              ? error.message
+              : "Gemini connection failed."
+          );
         }
-      );
-    } finally {
-      clearTimeout(timeout);
-    }
 
-    const raw = await response.text();
+        await sleep(attempt * 1200);
+        continue;
 
-    if (!response.ok) {
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (response.ok) {
+        break;
+      }
+
+      if (response.status === 503 && attempt < 3) {
+        await sleep(attempt * 1500);
+        continue;
+      }
+
       return NextResponse.json(
         {
           error: `Gemini API returned ${response.status}`,
-          details: raw.slice(0, 1200)
+          details: raw.slice(0, 1200),
         },
         { status: 502 }
       );
     }
 
-    const data = JSON.parse(raw);
+    if (!response || !response.ok) {
+      return NextResponse.json(
+        { error: "Gemini could not process the request." },
+        { status: 502 }
+      );
+    }
+
+    let data;
+
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error("Gemini returned an invalid JSON response.");
+    }
 
     const outputText = data.candidates?.[0]?.content?.parts
-      ?.map((part: any) => part.text || "")
+      ?.map((part: { text?: string }) => part.text || "")
       .join("\n");
 
     if (!outputText) {
-      throw new Error("Gemini returned no analysis.");
+      throw new Error(
+        data.candidates?.[0]?.finishReason ||
+          "Gemini returned no analysis."
+      );
     }
 
     const cleaned = outputText
@@ -154,7 +206,13 @@ Return ONLY valid JSON:
       .replace(/\s*```$/, "")
       .trim();
 
-    const result = JSON.parse(cleaned);
+    let result;
+
+    try {
+      result = JSON.parse(cleaned);
+    } catch {
+      throw new Error("Gemini returned invalid thumbnail concepts.");
+    }
 
     if (
       !Array.isArray(result.concepts) ||
@@ -163,10 +221,20 @@ Return ONLY valid JSON:
       throw new Error("AI did not return exactly 4 concepts.");
     }
 
+    const concepts = result.concepts.map(
+      (concept: Record<string, unknown>, index: number) => ({
+        title: String(concept.headline || `Concept ${index + 1}`),
+        description: String(concept.visual_scene || ""),
+        prompt: String(concept.image_prompt || ""),
+        emotion: String(concept.emotion || ""),
+        color_style: String(concept.color_style || ""),
+      })
+    );
+
     return NextResponse.json({
       success: true,
-      video_summary: result.video_summary || "",
-      concepts: result.concepts
+      video_summary: String(result.video_summary || ""),
+      concepts,
     });
 
   } catch (error) {
@@ -177,9 +245,9 @@ Return ONLY valid JSON:
         error:
           error instanceof Error
             ? error.message
-            : "Unknown server error"
+            : "Unknown server error",
       },
       { status: 500 }
     );
   }
-}
+        }
