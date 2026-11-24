@@ -509,6 +509,24 @@ export default function Home() {
         </footer>
       </section>
 
+     .seo-grid article {
+  text-align: center;
+}
+
+.seo-grid article button,
+.seo-grid article a {
+  display: inline-block;
+  text-align: center;
+  margin-top: 8px;
+}
+
+.seo-faq {
+  text-align: center;
+}
+
+.seo-faq details {
+  text-align: left;
+      }
       <style jsx global>{`
         * { box-sizing: border-box; }
         body { margin: 0; font-family: Arial, Helvetica, sans-serif; }
