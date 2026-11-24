@@ -1,32 +1,150 @@
+
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { ChangeEvent, useRef, useState } from "react";
 
 type Concept = {
   title: string;
   description: string;
   prompt: string;
-  image?: string;
+  imageUrl?: string;
 };
 
+const DEFAULT_CONCEPTS: Concept[] = [
+  {
+    title: "Cinematic",
+    description: "Dramatic lighting and cinematic composition",
+    prompt: "Create a cinematic YouTube thumbnail with dramatic lighting, strong subject focus, vibrant colors and a professional composition.",
+  },
+  {
+    title: "High CTR",
+    description: "Bold colors and an attention-grabbing layout",
+    prompt: "Create a high click-through-rate YouTube thumbnail with bold colors, strong contrast, an expressive subject and a clear visual story.",
+  },
+  {
+    title: "Professional",
+    description: "Clean and premium thumbnail design",
+    prompt: "Create a premium professional YouTube thumbnail with clean composition, sharp details, balanced colors and a clear focal point.",
+  },
+  {
+    title: "Gaming Style",
+    description: "Energetic gaming-inspired design",
+    prompt: "Create an exciting gaming YouTube thumbnail with dynamic action, dramatic effects, vivid colors and a powerful focal subject.",
+  },
+];
+
+function waitForMetadata(video: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (video.readyState >= 1) {
+      resolve();
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      reject(new Error("Video loading timed out. Please try another video."));
+    }, 20000);
+
+    video.onloadedmetadata = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+
+    video.onerror = () => {
+      window.clearTimeout(timeout);
+      reject(new Error("Unable to read this video file."));
+    };
+  });
+}
+
+function seekVideo(
+  video: HTMLVideoElement,
+  time: number
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      reject(new Error("Video frame loading timed out."));
+    }, 15000);
+
+    const finish = () => {
+      window.clearTimeout(timeout);
+      video.removeEventListener("seeked", finish);
+      resolve();
+    };
+
+    video.addEventListener("seeked", finish, { once: true });
+    video.currentTime = time;
+  });
+}
+
+async function captureVideoFrames(file: File): Promise<string[]> {
+  const video = document.createElement("video");
+  const objectUrl = URL.createObjectURL(file);
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  video.src = objectUrl;
+
+  try {
+    await waitForMetadata(video);
+
+    const duration = video.duration;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error("This video has an invalid duration.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Could not prepare the video frame.");
+    }
+
+    const frames: string[] = [];
+    const sampleCount = Math.min(4, Math.max(2, Math.floor(duration)));
+
+    for (let i = 0; i < sampleCount; i++) {
+      const time =
+        sampleCount === 1
+          ? 0
+          : Math.min(
+              Math.max(0, (duration * (i + 1)) / (sampleCount + 1)),
+              Math.max(0, duration - 0.2)
+            );
+
+      await seekVideo(video, time);
+
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frames.push(canvas.toDataURL("image/jpeg", 0.75));
+    }
+
+    return frames;
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export default function Home() {
-  const fileInput = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoURL, setVideoURL] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
   const [description, setDescription] = useState("");
-  const [concepts, setConcepts] = useState<Concept[]>([]);
-  const [selected, setSelected] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  const [concepts, setConcepts] = useState<Concept[]>(DEFAULT_CONCEPTS);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [overlayText, setOverlayText] = useState("EPIC MOMENT!");
-  const [fontSize, setFontSize] = useState("48");
 
-  function uploadVideo(file?: File) {
+  const selectedConcept = concepts[selectedIndex];
+
+  function handleVideoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
     if (!file) return;
 
     if (!file.type.startsWith("video/")) {
@@ -34,94 +152,30 @@ export default function Home() {
       return;
     }
 
-    if (file.size > 100 * 1024 * 1024) {
-      setError("Please select a video smaller than 100 MB.");
-      return;
+    if (videoUrl) {
+      URL.revokeObjectURL(videoUrl);
     }
 
-    if (videoURL) URL.revokeObjectURL(videoURL);
-
     setVideoFile(file);
-    setVideoURL(URL.createObjectURL(file));
-    setConcepts([]);
+    setVideoUrl(URL.createObjectURL(file));
     setError("");
     setMessage("Video uploaded successfully.");
+    setConcepts(DEFAULT_CONCEPTS);
+    setSelectedIndex(0);
   }
 
   async function analyzeVideo() {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-
-    if (!videoFile || !video || !canvas) {
+    if (!videoFile) {
       setError("Please upload a video first.");
       return;
     }
 
-    setLoading(true);
+    setIsAnalyzing(true);
     setError("");
-    setMessage("Analyzing your video...");
+    setMessage("");
 
     try {
-      if (video.readyState < 2) {
-        await new Promise<void>((resolve, reject) => {
-          video.onloadeddata = () => resolve();
-          video.onerror = () => reject(new Error("Video could not load."));
-          video.load();
-        });
-      }
-
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("Canvas is not available.");
-
-      canvas.width = 640;
-      canvas.height = 360;
-
-      const duration = video.duration;
-
-      if (!Number.isFinite(duration) || duration <= 0) {
-        throw new Error("Could not detect video duration.");
-      }
-
-      const frames: string[] = [];
-
-      for (let i = 0; i < 6; i++) {
-        const time = Math.min(
-          (duration * (i + 1)) / 7,
-          Math.max(0, duration - 0.2)
-        );
-
-        await new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => {
-            cleanup();
-            reject(new Error("Video frame timed out. Try another MP4."));
-          }, 20000);
-
-          const cleanup = () => {
-            clearTimeout(timeout);
-            video.removeEventListener("seeked", done);
-            video.removeEventListener("error", failed);
-          };
-
-          const done = () => {
-            cleanup();
-            resolve();
-          };
-
-          const failed = () => {
-            cleanup();
-            reject(new Error("Could not read this video frame."));
-          };
-
-          video.addEventListener("seeked", done, { once: true });
-          video.addEventListener("error", failed, { once: true });
-          video.currentTime = time;
-        });
-
-        context.drawImage(video, 0, 0, 640, 360);
-        frames.push(canvas.toDataURL("image/jpeg", 0.65));
-      }
-
-      setMessage("Sending video frames to AI...");
+      const frames = await captureVideoFrames(videoFile);
 
       const response = await fetch("/api/analyze", {
         method: "POST",
@@ -137,47 +191,60 @@ export default function Home() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "AI analysis failed.");
+        throw new Error(data.error || data.message || "AI analysis failed.");
       }
 
-      const results = data.concepts || data.thumbnails || [];
+      const receivedConcepts = Array.isArray(data.concepts)
+        ? data.concepts
+        : Array.isArray(data.thumbnails)
+          ? data.thumbnails
+          : [];
 
-      if (!Array.isArray(results) || results.length === 0) {
-        throw new Error("AI did not return thumbnail concepts.");
+      if (receivedConcepts.length > 0) {
+        const formattedConcepts: Concept[] = receivedConcepts
+          .slice(0, 4)
+          .map((item: Record<string, unknown>, index: number) => ({
+            title: String(item.title || item.name || `Concept ${index + 1}`),
+            description: String(
+              item.description || item.reason || "AI-generated thumbnail concept"
+            ),
+            prompt: String(
+              item.image_prompt ||
+                item.prompt ||
+                item.description ||
+                DEFAULT_CONCEPTS[index]?.prompt ||
+                DEFAULT_CONCEPTS[0].prompt
+            ),
+            imageUrl: String(item.imageUrl || item.image_url || "") || undefined,
+          }));
+
+        setConcepts(formattedConcepts);
+        setSelectedIndex(0);
       }
 
-      const formatted: Concept[] = results.slice(0, 4).map(
-        (item: any, index: number) => ({
-          title: item.title || `Thumbnail Concept ${index + 1}`,
-          description:
-            item.description || item.text || "AI generated thumbnail idea.",
-          prompt:
-            item.imagePrompt ||
-            item.image_prompt ||
-            item.prompt ||
-            item.description ||
-            description,
-        })
+      setMessage(
+        data.video_summary
+          ? `Analysis complete: ${data.video_summary}`
+          : "Video analysis completed."
       );
-
-      setConcepts(formatted);
-      setSelected(0);
-      setMessage("AI analysis completed successfully.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setMessage("");
+      setError(
+        err instanceof Error ? err.message : "Something went wrong during analysis."
+      );
     } finally {
-      setLoading(false);
+      setIsAnalyzing(false);
     }
   }
 
   async function generateImage() {
-    const concept = concepts[selected];
-    if (!concept) return;
+    if (!selectedConcept) {
+      setError("Please select a thumbnail concept.");
+      return;
+    }
 
-    setGenerating(true);
+    setIsGenerating(true);
     setError("");
-    setMessage("Creating your AI thumbnail...");
+    setMessage("");
 
     try {
       const response = await fetch("/api/generate-image", {
@@ -186,7 +253,7 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          prompt: concept.prompt,
+          prompt: selectedConcept.prompt,
           description,
         }),
       });
@@ -194,459 +261,380 @@ export default function Home() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Image generation failed.");
+        throw new Error(
+          data.error || data.message || "Image generation failed."
+        );
       }
 
-      const image =
-        data.image ||
+      let imageUrl =
         data.imageUrl ||
         data.image_url ||
-        data.url;
+        data.url ||
+        data.image ||
+        "";
 
-      if (!image) {
-        throw new Error("Image API did not return an image.");
+      if (typeof imageUrl === "string" && imageUrl && !imageUrl.startsWith("data:") && !imageUrl.startsWith("http")) {
+        imageUrl = `data:image/png;base64,${imageUrl}`;
       }
 
-      setConcepts((old) =>
-        old.map((item, index) =>
-          index === selected ? { ...item, image } : item
+      if (!imageUrl) {
+        throw new Error("The image API did not return an image.");
+      }
+
+      setConcepts((previous) =>
+        previous.map((concept, index) =>
+          index === selectedIndex
+            ? { ...concept, imageUrl: String(imageUrl) }
+            : concept
         )
       );
 
-      setMessage("Your thumbnail is ready!");
+      setMessage("Thumbnail image generated successfully.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Image generation failed.");
-      setMessage("");
+      setError(
+        err instanceof Error ? err.message : "Could not generate the image."
+      );
     } finally {
-      setGenerating(false);
+      setIsGenerating(false);
     }
   }
 
-  function downloadThumbnail() {
-    const concept = concepts[selected];
-
-    if (!concept) {
-      setError("Please select a thumbnail concept.");
+  function downloadImage() {
+    if (!selectedConcept?.imageUrl) {
+      setError("Generate a thumbnail image before downloading.");
       return;
     }
-
-    if (concept.image) {
-      const link = document.createElement("a");
-      link.href = concept.image;
-      link.download = "getyourthumbnail.png";
-      link.click();
-      return;
-    }
-
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-
-    if (!canvas || !video || video.readyState < 2) {
-      setError("Please generate a thumbnail first.");
-      return;
-    }
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    canvas.width = 1280;
-    canvas.height = 720;
-
-    ctx.drawImage(video, 0, 0, 1280, 720);
-
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
-    ctx.fillRect(0, 0, 1280, 720);
-
-    ctx.font = `900 ${Number(fontSize)}px Arial`;
-    ctx.textAlign = "center";
-    ctx.lineWidth = 8;
-    ctx.strokeStyle = "#000000";
-    ctx.fillStyle = "#ffffff";
-
-    ctx.strokeText(overlayText, 640, 620);
-    ctx.fillText(overlayText, 640, 620);
 
     const link = document.createElement("a");
+    link.href = selectedConcept.imageUrl;
     link.download = "getyourthumbnail.png";
-    link.href = canvas.toDataURL("image/png");
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
   }
 
-  const current = concepts[selected];
-
   return (
-    <main>
-      <div className="wrap">
-        <nav className="nav">
-          <a href="#" className="brand">
-            <span className="brand-icon">✦</span>
-            GetYour<span className="gradient-text">Thumbnail</span>
+    <main className="wrap">
+      <nav className="nav">
+        <a href="#" className="logo">
+          GetYour<span>Thumbnail</span>
+        </a>
+
+        <div className="nav-links">
+          <a href="#studio">Studio</a>
+          <a href="#how-it-works">How it works</a>
+          <a href="#pricing">Pricing</a>
+        </div>
+
+        <a href="#studio" className="nav-button">
+          Open Studio
+        </a>
+      </nav>
+
+      <section className="hero">
+        <div className="hero-copy">
+          <div className="eyebrow">AI POWERED THUMBNAIL STUDIO</div>
+
+          <h1>
+            Turn Videos Into
+            <br />
+            <span>Click-Worthy</span>
+            <br />
+            Thumbnails.
+          </h1>
+
+          <p>
+            Upload your video, let AI understand your content, and create
+            powerful thumbnail concepts designed to make people stop scrolling.
+          </p>
+
+          <a href="#studio" className="nav-button">
+            Create Your Thumbnail →
           </a>
+        </div>
 
-          <div className="nav-links">
-            <a href="#studio">Studio</a>
-            <a href="#how">How It Works</a>
-            <a href="#pricing">Pricing</a>
-          </div>
-
-          <div className="nav-actions">
-            <a href="#studio" className="btn btn-primary small">
-              Open Studio ↗
-            </a>
-            <button
-              className="mobile-toggle"
-              onClick={() => document.querySelector(".nav-links")?.classList.toggle("open")}
-            >
-              ☰
-            </button>
-          </div>
-        </nav>
-
-        <section className="hero">
-          <div className="hero-copy">
-            <div className="eyebrow">
-              <span className="pulse" />
-              AI POWERED THUMBNAIL CREATION
-            </div>
-
-            <h1>
-              Turn Videos Into
-              <span className="gradient-text"> Click-Worthy</span>
-              Thumbnails.
-            </h1>
-
-            <p className="hero-sub">
-              Upload your video. Let AI discover the best moments and
-              transform them into powerful thumbnail concepts designed
-              to capture attention.
+        <div className="hero-art">
+          <div className="glow" />
+          <div className="mock-window">
+            <div className="eyebrow">YOUR NEXT BIG THUMBNAIL</div>
+            <h2>Make Every Click Count.</h2>
+            <p>
+              Analyze. Create. Download.
+              <br />
+              Your thumbnail workflow starts here.
             </p>
-
-            <div className="hero-buttons">
-              <a href="#studio" className="btn btn-primary">
-                Create Thumbnail →
-              </a>
-              <a href="#how" className="btn btn-ghost">
-                How It Works
-              </a>
-            </div>
-
-            <div className="trust-row">
-              <span>✓ AI Video Analysis</span>
-              <span>✓ 4 Creative Ideas</span>
-              <span>✓ HD Export</span>
-            </div>
+            <div className="notice">AI Thumbnail Creation Studio</div>
           </div>
+        </div>
+      </section>
 
-          <div className="hero-art">
-            <div className="glow glow-one" />
-            <div className="glow glow-two" />
-
-            <div className="mock-window">
-              <div className="mock-top">
-                <div className="dots"><i /><i /><i /></div>
-                <span>THUMBNAIL PREVIEW</span>
-                <span className="live-tag">● LIVE</span>
-              </div>
-
-              <div className="mock-image">
-                <div className="mock-sun" />
-                <div className="mock-mountain m1" />
-                <div className="mock-mountain m2" />
-                <div className="mock-copy">
-                  <small>THE ULTIMATE MOMENT</small>
-                  <strong>INSANE!</strong>
-                  <em>AI THUMBNAIL STUDIO</em>
-                </div>
-              </div>
-
-              <div className="mock-bottom">
-                <span>✦ AI DESIGN ENGINE</span>
-                <span className="mock-pill">1280 × 720</span>
-              </div>
-            </div>
-
-            <div className="float-card">
-              <div className="float-icon">✓</div>
-              <div>
-                <b>AI Concepts Ready</b>
-                <small>Creative thumbnail ideas</small>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="stats">
-          <div><b>AI Powered</b><span>Video Analysis</span></div>
-          <div><b>4 Concepts</b><span>Creative Directions</span></div>
-          <div><b>1280 × 720</b><span>HD Thumbnail Export</span></div>
-          <div><b>Fast Workflow</b><span>Simple Creation</span></div>
-        </section>
-      </div>
+      <section className="stats">
+        <div>
+          <strong>AI</strong>
+          <span>Video Analysis</span>
+        </div>
+        <div>
+          <strong>4</strong>
+          <span>Creative Concepts</span>
+        </div>
+        <div>
+          <strong>HD</strong>
+          <span>Thumbnail Workflow</span>
+        </div>
+      </section>
 
       <section className="studio-section" id="studio">
-        <div className="wrap">
-          <div className="section-heading">
-            <div className="eyebrow">YOUR CREATIVE WORKSPACE</div>
-            <h2>AI Thumbnail <span className="gradient-text">Studio</span></h2>
-            <p>Upload your video and let AI find your next winning thumbnail idea.</p>
+        <div className="section-heading">
+          <h2>Your Thumbnail Studio</h2>
+          <p>Upload your video and start creating your next thumbnail.</p>
+        </div>
+
+        <div className="studio-grid">
+          <div className="panel">
+            <h3 className="panel-title">01. Upload Your Video</h3>
+
+            <label className="dropzone">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="video/*"
+                onChange={handleVideoChange}
+              />
+              <strong>＋ Choose a video</strong>
+              <span>Tap here to upload your video</span>
+              <span>Supported formats depend on your browser</span>
+            </label>
+
+            {videoUrl && (
+              <div className="video-box">
+                <video src={videoUrl} controls />
+              </div>
+            )}
+
+            {videoFile && (
+              <div className="notice">
+                Selected: {videoFile.name}
+              </div>
+            )}
+
+            <h3 className="panel-title" style={{ marginTop: 25 }}>
+              02. Describe Your Video
+            </h3>
+
+            <textarea
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Example: A gaming video where I defeat a powerful enemy..."
+              rows={4}
+              style={{
+                width: "100%",
+                resize: "vertical",
+                color: "white",
+                background: "#171526",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 12,
+                padding: 14,
+                outline: "none",
+              }}
+            />
+
+            <div className="usage">
+              <strong>Ready to analyze?</strong>
+              <div className="usage-track">
+                <span />
+              </div>
+            </div>
+
+            <button
+              className="generate-btn"
+              onClick={analyzeVideo}
+              disabled={!videoFile || isAnalyzing}
+            >
+              {isAnalyzing ? "Analyzing Video..." : "Analyze Video With AI →"}
+            </button>
+
+            {error && <div className="notice">{error}</div>}
+            {message && <div className="notice">{message}</div>}
           </div>
 
-          <div className="studio-grid">
-            <div className="panel">
-              <div className="panel-title">
-                <span className="step">01</span>
-                <div>
-                  <h3>Upload Your Video</h3>
-                  <p>Choose the video you want to turn into a thumbnail.</p>
-                </div>
-              </div>
+          <div className="panel">
+            <h3 className="panel-title">03. Thumbnail Concepts</h3>
 
-              <div
-                className="dropzone"
-                onClick={() => fileInput.current?.click()}
-              >
-                <input
-                  ref={fileInput}
-                  type="file"
-                  accept="video/*"
-                  onChange={(e) => uploadVideo(e.target.files?.[0])}
-                />
-
-                <div className="upload-icon">↑</div>
-                <b>{videoFile ? videoFile.name : "Drop your video here or browse"}</b>
-                <span>Click to upload your video</span>
-                <small>MP4, MOV, WEBM · Maximum 100 MB</small>
-              </div>
-
-              {videoURL && (
-                <div className="video-box">
-                  <video
-                    ref={videoRef}
-                    src={videoURL}
-                    controls
-                    playsInline
-                    preload="auto"
-                  />
-                  <button
-                    className="btn btn-ghost small"
-                    onClick={() => {
-                      if (videoURL) URL.revokeObjectURL(videoURL);
-                      setVideoURL("");
-                      setVideoFile(null);
-                      setConcepts([]);
+            <div
+              className="concepts-grid"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 10,
+                marginBottom: 20,
+              }}
+            >
+              {concepts.map((concept, index) => (
+                <button
+                  key={`${concept.title}-${index}`}
+                  onClick={() => setSelectedIndex(index)}
+                  className="concept-card"
+                  style={{
+                    textAlign: "left",
+                    padding: 13,
+                    borderRadius: 12,
+                    border:
+                      selectedIndex === index
+                        ? "1px solid #a78bfa"
+                        : "1px solid rgba(255,255,255,.1)",
+                    background:
+                      selectedIndex === index
+                        ? "rgba(139,92,246,.2)"
+                        : "#171526",
+                    color: "white",
+                  }}
+                >
+                  <strong>{concept.title}</strong>
+                  <p
+                    style={{
+                      color: "#a6a1b8",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      marginBottom: 0,
                     }}
                   >
-                    Remove Video ×
-                  </button>
-                </div>
-              )}
+                    {concept.description}
+                  </p>
+                </button>
+              ))}
+            </div>
 
-              <div className="usage">
-                <span>Video Analysis</span>
-                <b>{loading ? "Processing..." : videoFile ? "Ready" : "Waiting for upload"}</b>
-              </div>
+            <h3 className="panel-title">04. Preview</h3>
 
-              <div className="usage-track">
-                <i style={{ width: loading ? "65%" : videoFile ? "35%" : "0%" }} />
-              </div>
-
-              <label className="fine-print">
-                Describe your video or thumbnail idea (optional)
-              </label>
-
-              <div className="edit-controls">
-                <input
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Example: Gaming, action, cinematic..."
+            <div className="canvas-wrap">
+              {selectedConcept?.imageUrl ? (
+                <img
+                  src={selectedConcept.imageUrl}
+                  alt={selectedConcept.title}
                 />
-              </div>
-
-              <button
-                className="btn btn-primary full generate-btn"
-                onClick={analyzeVideo}
-                disabled={!videoFile || loading}
-              >
-                {loading ? "◌ Analyzing Video..." : "✦ Analyze Video With AI"}
-              </button>
-
-              <p className="fine-print" style={{ marginTop: 12 }}>
-                AI analyzes selected video frames to create thumbnail concepts.
-              </p>
-
-              {message && <div className="notice">{message}</div>}
-              {error && (
-                <div className="notice" style={{ color: "#fca5a5" }}>
-                  {error}
+              ) : (
+                <div className="empty-result">
+                  <div>
+                    <strong>Your thumbnail preview will appear here</strong>
+                    <span>
+                      Select a concept and generate your thumbnail image.
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
 
-            <div className="panel">
-              <div className="panel-title">
-                <span className="step">02</span>
-                <div>
-                  <h3>Thumbnail Creator</h3>
-                  <p>Choose a concept, generate and download your design.</p>
-                </div>
-              </div>
+            <button
+              className="generate-btn"
+              onClick={generateImage}
+              disabled={isGenerating || !selectedConcept}
+            >
+              {isGenerating ? "Generating Image..." : "Generate Thumbnail Image →"}
+            </button>
 
-              {concepts.length === 0 ? (
-                <div className="empty-result">
-                  <div className="empty-icon">✦</div>
-                  <b>Your Thumbnail Will Appear Here</b>
-                  <span>
-                    Upload a video and click Analyze Video With AI.
-                    Your creative concepts will appear here.
-                  </span>
-                  <div className="empty-preview">
-                    <div /><div /><div />
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="design-tabs">
-                    {concepts.map((item, index) => (
-                      <button
-                        key={index}
-                        className={selected === index ? "selected" : ""}
-                        onClick={() => setSelected(index)}
-                      >
-                        Concept {index + 1}
-                      </button>
-                    ))}
-                  </div>
+            <div className="edit-controls">
+              <button onClick={downloadImage}>↓ Download PNG</button>
+              <button
+                onClick={() => {
+                  setConcepts(DEFAULT_CONCEPTS);
+                  setSelectedIndex(0);
+                  setMessage("Concepts reset.");
+                  setError("");
+                }}
+              >
+                Reset Concepts
+              </button>
+            </div>
 
-                  <div className="canvas-wrap">
-                    {current?.image ? (
-                      <img
-                        src={current.image}
-                        alt="AI generated thumbnail"
-                        style={{ width: "100%", display: "block" }}
-                      />
-                    ) : (
-                      <canvas
-                        ref={canvasRef}
-                        width={1280}
-                        height={720}
-                        className="hide"
-                      />
-                    )}
-
-                    {!current?.image && (
-                      <div className="empty-result">
-                        <div className="empty-icon">▧</div>
-                        <b>{current?.title}</b>
-                        <span>{current?.description}</span>
-                        <span>Generate your image using the button below.</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="edit-controls">
-                    <label>
-                      Thumbnail Text
-                      <input
-                        value={overlayText}
-                        onChange={(e) => setOverlayText(e.target.value)}
-                        placeholder="Enter thumbnail text"
-                      />
-                    </label>
-
-                    <label>
-                      Text Size
-                      <input
-                        type="number"
-                        min="20"
-                        max="100"
-                        value={fontSize}
-                        onChange={(e) => setFontSize(e.target.value)}
-                      />
-                    </label>
-
-                    <button
-                      className="btn btn-primary full"
-                      onClick={generateImage}
-                      disabled={generating}
-                    >
-                      {generating ? "Generating Image..." : "✦ Generate AI Thumbnail"}
-                    </button>
-
-                    <button
-                      className="btn btn-ghost full"
-                      onClick={downloadThumbnail}
-                    >
-                      ↓ Download Thumbnail PNG
-                    </button>
-                  </div>
-                </>
-              )}
+            <div className="notice">
+              Final image generation requires a working image-generation API
+              route. The concept preview is available even before an image is
+              generated.
             </div>
           </div>
         </div>
       </section>
 
-      <section className="how-section wrap" id="how">
+      <section className="how-section" id="how-it-works">
         <div className="section-heading">
-          <div className="eyebrow">SIMPLE CREATION PROCESS</div>
-          <h2>How It <span className="gradient-text">Works</span></h2>
-          <p>Three simple steps to start creating better thumbnails.</p>
+          <h2>How It Works</h2>
+          <p>Three simple steps to start your thumbnail workflow.</p>
         </div>
 
         <div className="steps">
-          <article>
-            <span>01</span>
-            <div>↑</div>
-            <h3>Upload Your Video</h3>
-            <p>Choose your video and tell us what kind of thumbnail you want.</p>
-          </article>
+          <div className="step-card">
+            <div className="step-number">01</div>
+            <strong>Upload Your Video</strong>
+            <p>
+              Select a video from your device and tell us what your content is
+              about.
+            </p>
+          </div>
 
-          <article>
-            <span>02</span>
-            <div>✦</div>
-            <h3>AI Finds The Ideas</h3>
-            <p>AI studies video frames and creates four creative thumbnail concepts.</p>
-          </article>
+          <div className="step-card">
+            <div className="step-number">02</div>
+            <strong>Analyze With AI</strong>
+            <p>
+              AI analyzes video frames and helps prepare creative thumbnail
+              concepts.
+            </p>
+          </div>
 
-          <article>
-            <span>03</span>
-            <div>↓</div>
-            <h3>Generate & Download</h3>
-            <p>Generate your selected design and download your thumbnail.</p>
-          </article>
+          <div className="step-card">
+            <div className="step-number">03</div>
+            <strong>Create And Download</strong>
+            <p>
+              Generate an image from your selected concept and download it when
+              ready.
+            </p>
+          </div>
         </div>
       </section>
 
       <section className="pricing-section" id="pricing">
-        <div className="wrap pricing-inner">
-          <div>
-            <div className="eyebrow">START CREATING TODAY</div>
-            <h2>Make Every Thumbnail <span className="gradient-text">Count.</span></h2>
-            <p>
-              Start exploring AI-powered thumbnail creation.
-              Build your next design with GetYourThumbnail.
-            </p>
+        <div className="section-heading">
+          <h2>Simple Pricing</h2>
+          <p>Start exploring the thumbnail studio.</p>
+        </div>
+
+        <div className="pricing-inner">
+          <div className="price-card featured">
+            <div className="price-label">CREATOR STUDIO</div>
+            <div className="price">
+              Free <small>/ Starter</small>
+            </div>
+            <ul>
+              <li>✓ Video upload</li>
+              <li>✓ AI video analysis</li>
+              <li>✓ Four thumbnail concepts</li>
+              <li>✓ Thumbnail preview</li>
+              <li>✓ PNG download for generated images</li>
+            </ul>
+            <a href="#studio" className="nav-button">
+              Start Creating
+            </a>
           </div>
 
           <div className="price-card">
-            <div className="price-label">CREATOR STUDIO</div>
-            <div className="price">Free <small>/ Starter</small></div>
+            <div className="price-label">COMING LATER</div>
+            <div className="price">
+              Pro <small>/ Future Plan</small>
+            </div>
             <ul>
-              
-<li>✓ Video upload</li>
-<li>✓ AI video analysis</li>
-<li>✓ Four thumbnail concepts</li>
-<li>✓ Thumbnail preview</li>
-<li>✓ PNG download</li>
-</ul>
-</div>
-</div>
-</div>
-</section>
+              <li>✓ More creative styles</li>
+              <li>✓ Advanced editing tools</li>
+              <li>✓ More export options</li>
+              <li>✓ Higher generation limits</li>
+              <li>✓ Project history</li>
+            </ul>
+            <p>Pro features are planned for a future release.</p>
+          </div>
+        </div>
+      </section>
 
-<footer className="footer">
-  <p>© 2026 GetYourThumbnail. Create better thumbnails with AI.</p>
-</footer>
-</div>
-);
-}
+      <footer className="footer">
+        <p>© 2026 GetYourThumbnail. Create better thumbnails with AI.</p>
+      </footer>
+    </main>
+  );
+    }
