@@ -632,7 +632,21 @@ export default function Home() {
             <div className="price-label">CREATOR STUDIO</div>
             <div className="price">Free <small>/ Starter</small></div>
             <ul>
-              <li>✓ Video upload</li>
-              <li>✓ AI video analysis</li>
-              <li>✓ Four thumbnail concepts</li>
-              <li>✓ T
+              
+<li>✓ Video upload</li>
+<li>✓ AI video analysis</li>
+<li>✓ Four thumbnail concepts</li>
+<li>✓ Thumbnail preview</li>
+<li>✓ PNG download</li>
+</ul>
+</div>
+</div>
+</div>
+</section>
+
+<footer className="footer">
+  <p>© 2026 GetYourThumbnail. Create better thumbnails with AI.</p>
+</footer>
+</div>
+);
+}
