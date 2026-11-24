@@ -10,10 +10,18 @@ export async function POST(request: Request) {
     const apiToken = process.env.CLOUDFLARE_API_TOKEN;
 
     if (!accountId || !apiToken) {
-      return NextResponse.json(
-        { error: "Cloudflare credentials missing in Vercel." },
-        { status: 500 }
-      );
+  const missing = [];
+
+  if (!accountId) missing.push("CLOUDFLARE_ACCOUNT_ID");
+  if (!apiToken) missing.push("CLOUDFLARE_API_TOKEN");
+
+  return NextResponse.json(
+    {
+      error: "Missing environment variables",
+      missing,
+    },
+    { status: 500 }
+  );
     }
 
     const body = await request.json();
