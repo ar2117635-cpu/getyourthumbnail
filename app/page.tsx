@@ -35,10 +35,52 @@ const DEFAULT_CONCEPTS: Concept[] = [
 
 function waitForMetadata(video: HTMLVideoElement): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (video.readyState >= 1) {
+    let finished = false;
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      video.removeEventListener("loadedmetadata", onLoaded);
+      video.removeEventListener("error", onError);
+    };
+
+    const onLoaded = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
       resolve();
-      return;
+    };
+
+    const onError = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+
+      const code = video.error?.code;
+      const reason =
+        code === 3
+          ? "Video decoding failed. This MP4 codec may not be supported."
+          : code === 4
+            ? "This video format or codec is not supported by your browser."
+            : "Unable to read this video file.";
+
+      reject(new Error(reason));
+    };
+
+    const timeout = window.setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error("Video loading timed out. Please try another video."));
+    }, 30000);
+
+    video.addEventListener("loadedmetadata", onLoaded);
+    video.addEventListener("error", onError);
+
+    if (video.readyState >= 1) {
+      onLoaded();
     }
+  });
+}
 
     const timeout = window.setTimeout(() => {
       reject(new Error("Video loading timed out. Please try another video."));
@@ -76,7 +118,63 @@ function seekVideo(
   });
 }
 
+
 async function captureVideoFrames(file: File): Promise<string[]> {
+  const video = document.createElement("video");
+  const objectUrl = URL.createObjectURL(file);
+
+  video.preload = "metadata";
+  video.muted = true;
+  video.playsInline = true;
+
+  try {
+    const metadataPromise = waitForMetadata(video);
+
+    video.src = objectUrl;
+    video.load();
+
+    await metadataPromise;
+
+    const duration = video.duration;
+
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error("This video has an invalid duration.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      throw new Error("Could not prepare the video frame.");
+    }
+
+    const frames: string[] = [];
+    const sampleCount = Math.min(4, Math.max(2, Math.floor(duration)));
+
+    for (let i = 0; i < sampleCount; i++) {
+      const time = Math.min(
+        (duration * (i + 1)) / (sampleCount + 1),
+        Math.max(0, duration - 0.2)
+      );
+
+      await seekVideo(video, time);
+
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frames.push(canvas.toDataURL("image/jpeg", 0.75));
+    }
+
+    return frames;
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
   const video = document.createElement("video");
   const objectUrl = URL.createObjectURL(file);
   video.preload = "auto";
