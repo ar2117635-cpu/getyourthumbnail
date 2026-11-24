@@ -1185,4 +1185,3 @@ footer span { color: var(--muted); }
     </main>
   );
 }
-</CodeBlock>
