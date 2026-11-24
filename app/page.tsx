@@ -20,7 +20,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState<number | null>(null);
   const [message, setMessage] = useState("");
-  const [activeTab, setActiveTab] = useState("studio");
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   function uploadVideo(file?: File) {
     if (!file) return;
@@ -168,7 +169,9 @@ export default function Home() {
         results.map((item: Record<string, unknown>, index: number) => ({
           title: String(item.title || `Concept ${index + 1}`),
           description: String(item.description || ""),
-          prompt: String(item.prompt || item.description || item.title || ""),
+          prompt: String(
+            item.prompt || item.description || item.title || ""
+          ),
         }))
       );
 
@@ -239,412 +242,589 @@ export default function Home() {
     link.remove();
   }
 
-  return (
-    <main className="studio">
-      <style jsx>{`
-        * { box-sizing: border-box; }
+  function navigate(tab: string) {
+    setActiveTab(tab);
+    setSidebarOpen(false);
+  }
 
-        .studio {
+  const menuItems = [
+    { id: "dashboard", icon: "⌂", label: "Dashboard" },
+    { id: "studio", icon: "✦", label: "Thumbnail Studio" },
+    { id: "projects", icon: "▣", label: "My Projects" },
+    { id: "history", icon: "◷", label: "Download History" },
+    { id: "favorites", icon: "♡", label: "Favorites" },
+    { id: "settings", icon: "⚙", label: "Settings" },
+  ];
+
+  const pageTitles: Record<string, string> = {
+    dashboard: "Dashboard",
+    studio: "Thumbnail Studio",
+    projects: "My Projects",
+    history: "Download History",
+    favorites: "Favorite Designs",
+    settings: "Settings",
+  };
+
+  return (
+    <main className="app-shell">
+      <style jsx global>{`
+        * {
+          box-sizing: border-box;
+        }
+
+        html, body {
+          margin: 0;
+          padding: 0;
+          background: #080711;
+          color: #f8f5ff;
+          font-family: Arial, Helvetica, sans-serif;
+        }
+
+        button, input, textarea {
+          font: inherit;
+        }
+
+        button {
+          cursor: pointer;
+        }
+
+        .app-shell {
           min-height: 100vh;
           background:
-            radial-gradient(ellipse at 15% 0%, #30205b 0%, transparent 38%),
-            radial-gradient(ellipse at 95% 25%, #211044 0%, transparent 35%),
+            radial-gradient(ellipse at 65% 0%, #251348 0%, transparent 35%),
+            radial-gradient(ellipse at 100% 65%, #101d43 0%, transparent 35%),
             #080711;
-          color: #fff;
-          font-family: Arial, sans-serif;
-          padding: 22px;
         }
 
-        .shell { max-width: 1250px; margin: auto; }
+        .sidebar {
+          position: fixed;
+          top: 0;
+          bottom: 0;
+          left: 0;
+          width: 255px;
+          padding: 25px 17px;
+          background: rgba(12, 10, 24, .96);
+          border-right: 1px solid #29203e;
+          display: flex;
+          flex-direction: column;
+          z-index: 20;
+          backdrop-filter: blur(20px);
+        }
+
+        .brand {
+          display: flex;
+          align-items: center;
+          gap: 11px;
+          padding: 5px 8px 30px;
+          border-bottom: 1px solid #282039;
+        }
+
+        .brand-icon {
+          width: 39px;
+          height: 39px;
+          display: grid;
+          place-items: center;
+          border-radius: 12px;
+          background: linear-gradient(135deg, #7545e8, #b44fe5);
+          box-shadow: 0 0 25px #8549e955;
+          font-size: 22px;
+        }
+
+        .brand-name {
+          font-size: 16px;
+          font-weight: 900;
+          letter-spacing: -.5px;
+        }
+
+        .brand-name span {
+          color: #bb8aff;
+        }
+
+        .nav-label {
+          margin: 27px 10px 12px;
+          color: #746b8b;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 1.8px;
+        }
+
+        .nav-item {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 13px;
+          padding: 13px 12px;
+          margin-bottom: 5px;
+          border: 1px solid transparent;
+          border-radius: 11px;
+          background: transparent;
+          color: #a9a1ba;
+          text-align: left;
+          font-size: 13px;
+          transition: .2s;
+        }
+
+        .nav-item:hover {
+          background: #1a1429;
+          color: white;
+        }
+
+        .nav-item.active {
+          color: white;
+          border-color: #6943a3;
+          background: linear-gradient(100deg, #37205e, #251638);
+          box-shadow: inset 3px 0 #b17aff, 0 0 20px #8545c522;
+        }
+
+        .nav-icon {
+          width: 21px;
+          text-align: center;
+          font-size: 18px;
+        }
+
+        .sidebar-bottom {
+          margin-top: auto;
+        }
+
+        .upgrade-card {
+          padding: 16px;
+          border: 1px solid #49326c;
+          border-radius: 14px;
+          background: linear-gradient(140deg, #26183f, #171329);
+        }
+
+        .upgrade-card strong {
+          display: block;
+          font-size: 13px;
+          margin-bottom: 7px;
+        }
+
+        .upgrade-card p {
+          color: #a69ab9;
+          font-size: 11px;
+          line-height: 1.6;
+          margin: 0 0 12px;
+        }
+
+        .upgrade-card button {
+          width: 100%;
+          padding: 9px;
+          border: 0;
+          border-radius: 8px;
+          color: white;
+          background: linear-gradient(100deg, #7546dc, #b34ed5);
+          font-size: 11px;
+          font-weight: bold;
+        }
+
+        .main-area {
+          min-height: 100vh;
+          margin-left: 255px;
+          padding: 25px 32px 50px;
+        }
 
         .topbar {
-          display: flex; justify-content: space-between;
-          align-items: center; gap: 15px; flex-wrap: wrap;
-          padding: 15px 0 25px;
-          border-bottom: 1px solid #30234c;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 15px;
+          padding-bottom: 23px;
+          border-bottom: 1px solid #292039;
         }
 
-        .brand { font-size: 23px; font-weight: 900; letter-spacing: -1px; }
-        .brand span { color: #b58aff; }
-
-        .nav { display: flex; gap: 9px; flex-wrap: wrap; }
-
-        button, a { font: inherit; }
-
-        .nav button {
-          border: 1px solid #40305e; color: #c9b9e8;
-          background: #151023; padding: 10px 15px;
-          border-radius: 10px; cursor: pointer;
+        .topbar-left {
+          display: flex;
+          align-items: center;
+          gap: 13px;
         }
 
-        .nav button.active {
-          color: white; border-color: #a77aff;
-          background: linear-gradient(110deg,#663bd0,#9d4bd1);
-          box-shadow: 0 0 18px #8d4bca55;
+        .topbar h2 {
+          font-size: 19px;
+          margin: 0;
         }
 
-        .hero { padding: 45px 0 30px; text-align: center; }
-
-        .eyebrow {
-          display: inline-block; color: #d0a8ff;
-          border: 1px solid #65418a; background: #27163c;
-          border-radius: 30px; padding: 8px 14px;
-          font-size: 11px; letter-spacing: 2px;
+        .topbar p {
+          color: #8e849f;
+          font-size: 11px;
+          margin: 5px 0 0;
         }
 
-        .hero h1 {
-          font-size: clamp(34px,6vw,61px);
-          line-height: 1.08; letter-spacing: -2px;
-          margin: 18px 0 12px;
+        .top-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
         }
 
-        .gradient {
-          background: linear-gradient(100deg,#9f7aff,#ee8bff);
+        .icon-button {
+          width: 37px;
+          height: 37px;
+          border: 1px solid #342746;
+          border-radius: 10px;
+          background: #171222;
+          color: #d8c7f5;
+          font-size: 16px;
+        }
+
+        .avatar {
+          width: 37px;
+          height: 37px;
+          display: grid;
+          place-items: center;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #7545e8, #d15bce);
+          font-weight: 900;
+        }
+
+        .mobile-menu {
+          display: none;
+          width: 38px;
+          height: 38px;
+          border: 1px solid #45315f;
+          border-radius: 10px;
+          color: white;
+          background: #1a1428;
+          font-size: 19px;
+        }
+
+        .content {
+          max-width: 1450px;
+          margin: auto;
+        }
+
+        .welcome {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+          flex-wrap: wrap;
+          margin: 29px 0 24px;
+        }
+
+        .welcome h1 {
+          margin: 0;
+          font-size: clamp(25px, 3vw, 35px);
+          letter-spacing: -1.2px;
+        }
+
+        .welcome p {
+          margin: 9px 0 0;
+          color: #9b91ad;
+          font-size: 13px;
+        }
+
+        .gradient-text {
+          background: linear-gradient(100deg, #a78aff, #ed8bff);
           -webkit-background-clip: text;
           background-clip: text;
           color: transparent;
         }
 
-        .hero p { color: #aaa1bc; line-height: 1.7; max-width: 650px; margin: auto; }
-
-        .stats {
-          display: grid; grid-template-columns: repeat(3,1fr);
-          gap: 12px; margin: 18px 0 28px;
-        }
-
-        .stat {
-          border: 1px solid #33264c; background: #120f20;
-          padding: 16px; border-radius: 14px; text-align: center;
-        }
-
-        .stat strong { display: block; font-size: 21px; color: #c59aff; }
-        .stat span { font-size: 11px; color: #9188a4; }
-
-        .grid {
-          display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
-          gap: 19px; align-items: start;
-        }
-
-        .panel {
-          background: linear-gradient(145deg,#171327,#100e1c);
-          border: 1px solid #382850; border-radius: 19px;
-          padding: 22px; box-shadow: 0 12px 45px #0005;
-          min-width: 0;
-        }
-
-        .panel h2 { font-size: 19px; margin: 0 0 7px; }
-        .muted { color: #958ba8; font-size: 13px; line-height: 1.6; }
-
-        .upload {
-          margin-top: 20px; padding: 34px 14px;
-          text-align: center; border: 1.5px dashed #8858bb;
-          background: #1c1530; border-radius: 15px;
-          cursor: pointer; transition: .2s;
-        }
-
-        .upload:hover { border-color: #d19cff; box-shadow: 0 0 20px #a34bca22; }
-        .upload .emoji { font-size: 40px; margin-bottom: 12px; }
-
-        .video {
-          width: 100%; max-height: 280px; border-radius: 12px;
-          background: #000; margin-top: 15px;
-        }
-
-        textarea {
-          width: 100%; min-height: 100px; resize: vertical;
-          background: #0c0a15; border: 1px solid #403252;
-          color: white; border-radius: 11px; padding: 13px;
-          margin-top: 9px; outline: none;
-        }
-
-        textarea:focus { border-color: #a878ed; }
-
-        .primary {
-          width: 100%; padding: 14px; border: 0;
-          color: white; font-weight: bold; border-radius: 11px;
-          cursor: pointer; margin-top: 16px;
-          background: linear-gradient(100deg,#7446db,#bd4ed0);
+        .primary-button {
+          padding: 12px 17px;
+          border: 0;
+          border-radius: 10px;
+          color: white;
+          font-weight: bold;
+          font-size: 12px;
+          background: linear-gradient(100deg, #7043dc, #b34ed4);
           box-shadow: 0 5px 22px #9146db44;
         }
 
-        .primary:disabled { opacity: .45; cursor: not-allowed; }
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          margin-bottom: 22px;
+        }
 
-        .secondary {
-          display: inline-block; text-decoration: none;
-          color: #d5b5ff; border: 1px solid #78539e;
-          background: #20152f; padding: 11px 15px;
-          border-radius: 10px; cursor: pointer;
+        .stat-card {
+          padding: 19px;
+          border: 1px solid #302542;
+          border-radius: 15px;
+          background: linear-gradient(145deg, #191428, #100e1c);
+          box-shadow: 0 12px 35px #0003;
+        }
+
+        .stat-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          color: #a59ab7;
+          font-size: 11px;
+        }
+
+        .stat-symbol {
+          width: 34px;
+          height: 34px;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+          background: #38235a;
+          color: #d2a8ff;
+          font-size: 17px;
+        }
+
+        .stat-card strong {
+          display: block;
+          margin-top: 16px;
+          font-size: 25px;
+        }
+
+        .stat-card small {
+          display: block;
+          margin-top: 5px;
+          color: #827991;
+          font-size: 10px;
+        }
+
+        .section-heading {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          margin: 27px 0 15px;
+        }
+
+        .section-heading h2 {
+          font-size: 17px;
+          margin: 0;
+        }
+
+        .section-heading span {
+          color: #9c87c1;
+          font-size: 11px;
+        }
+
+        .tool-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 17px;
+        }
+
+        .tool-card {
+          position: relative;
+          overflow: hidden;
+          min-height: 205px;
+          padding: 23px;
+          border: 1px solid #493365;
+          border-radius: 17px;
+          background: linear-gradient(135deg, #211637, #141124);
+          transition: .25s;
+        }
+
+        .tool-card:hover {
+          transform: translateY(-4px);
+          border-color: #b17aff;
+          box-shadow: 0 12px 35px #9146db22;
+        }
+
+        .tool-card.blue {
+          background: linear-gradient(135deg, #14223d, #111426);
+          border-color: #30466b;
+        }
+
+        .tool-card h3 {
+          margin: 15px 0 8px;
+          font-size: 18px;
+        }
+
+        .tool-card p {
+          max-width: 420px;
+          color: #a59bb6;
+          font-size: 12px;
+          line-height: 1.7;
+        }
+
+        .tool-emoji {
+          width: 45px;
+          height: 45px;
+          display: grid;
+          place-items: center;
+          border-radius: 13px;
+          background: #51327d;
+          font-size: 23px;
+        }
+
+        .blue .tool-emoji {
+          background: #263d66;
+        }
+
+        .tool-open {
+          margin-top: 15px;
+          padding: 0;
+          border: 0;
+          color: #d0a5ff;
+          background: transparent;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .blue .tool-open {
+          color: #9fc7ff;
+        }
+
+        .lower-grid {
+          display: grid;
+          grid-template-columns: 1.3fr .7fr;
+          gap: 16px;
+          margin-top: 20px;
+        }
+
+        .panel {
+          min-width: 0;
+          padding: 21px;
+          border: 1px solid #302542;
+          border-radius: 15px;
+          background: linear-gradient(145deg, #171327, #100e1b);
+        }
+
+        .panel h3 {
+          margin: 0 0 7px;
+          font-size: 15px;
+        }
+
+        .muted {
+          color: #978da8;
+          font-size: 12px;
+          line-height: 1.7;
+        }
+
+        .activity-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 13px 0;
+          border-bottom: 1px solid #292039;
+        }
+
+        .activity-row:last-child {
+          border-bottom: 0;
+        }
+
+        .activity-icon {
+          width: 35px;
+          height: 35px;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+          background: #2a1d43;
+          color: #d1a6ff;
+        }
+
+        .activity-row strong {
+          display: block;
+          font-size: 12px;
+        }
+
+        .activity-row small {
+          display: block;
+          margin-top: 4px;
+          color: #81778f;
+          font-size: 10px;
+        }
+
+        .studio-grid {
+          display: grid;
+          grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+          gap: 18px;
+          align-items: start;
+          margin-top: 25px;
+        }
+
+        .upload {
+          margin-top: 20px;
+          padding: 34px 14px;
+          text-align: center;
+          border: 1.5px dashed #8858bb;
+          background: #1c1530;
+          border-radius: 15px;
+          cursor: pointer;
+        }
+
+        .upload:hover {
+          border-color: #d19cff;
+          box-shadow: 0 0 20px #a34bca22;
+        }
+
+        .upload-emoji {
+          font-size: 38px;
+          margin-bottom: 12px;
+        }
+
+        .video-preview {
+          width: 100%;
+          max-height: 280px;
+          border-radius: 12px;
+          background: #000;
+          margin-top: 15px;
+        }
+
+        .description-input {
+          width: 100%;
+          min-height: 105px;
+          resize: vertical;
+          background: #0c0a15;
+          border: 1px solid #403252;
+          color: white;
+          border-radius: 11px;
+          padding: 13px;
+          margin-top: 10px;
+          outline: none;
+        }
+
+        .description-input:focus {
+          border-color: #a878ed;
+        }
+
+        .full-button {
+          width: 100%;
+          margin-top: 15px;
         }
 
         .message {
-          margin-top: 16px; padding: 13px;
-          border-radius: 10px; border: 1px solid #68418a;
-          background: #21152f; color: #d9c1fa;
-          font-size: 13px; overflow-wrap: anywhere;
+          margin-top: 15px;
+          padding: 13px;
+          border-radius: 10px;
+          border: 1px solid #68418a;
+          background: #21152f;
+          color: #d9c1fa;
+          font-size: 12px;
+          overflow-wrap: anywhere;
         }
 
         .concept {
-          border: 1px solid #3a2a50; background: #100e1d;
-          border-radius: 14px; padding: 16px; margin-top: 14px;
+          border: 1px solid #3a2a50;
+          background: #100e1d;
+          border-radius: 13px;
+          padding: 15px;
+          margin-top: 13px;
         }
 
-        .concept h3 { margin: 0; font-size: 16px; }
-        .concept p { color: #a59bb5; font-size: 13px; line-height: 1.65; }
-        .concept img { width: 100%; border-radius: 10px; display: block; margin: 12px 0; }
+        .concept h4 {
+          margin: 0;
+          font-size: 14px;
+        }
+
+        .concept p {
+          color: #a59bb5;
+          font-size: 12px;
+          line-height: 1.65;
+        }
+
+        .concept img {
+          width: 100%;
+          border-radius: 10px;
+          display: block;
+          margin: 12px 0;
+        }
 
         .concept button {
-          width: 100%; padding: 12px; border-radius: 9px;
-          border: 1px solid #8c59bc; color: white;
-          background: linear-gradient(100deg,#5831a4,#823eaf);
-          cursor: pointer; font-weight: bold;
+          width: 100%;
+          padding: 12px;
+          border-radius: 9px;
+          border: 1px solid #8c59bc;
+          color: white;
+          background: linear-gradient(100deg, #5831a4, #823eaf);
+          font-weight: bold;
+          font-size: 11px;
         }
-
-        .concept button:disabled { opacity: .5; cursor: not-allowed; }
-
-        .empty {
-          border: 1px dashed #443252; background: #100d1b;
-          border-radius: 14px; padding: 50px 15px;
-          text-align: center; margin-top: 18px;
-        }
-
-        .empty .emoji { font-size: 42px; }
-        .toolcards {
-          display: grid; grid-template-columns: 1fr 1fr;
-          gap: 15px; margin-top: 30px;
-        }
-
-        .toolcard {
-          display: block; text-decoration: none; color: white;
-          padding: 22px; border-radius: 16px;
-          border: 1px solid #48305e;
-          background: linear-gradient(135deg,#1b1530,#171025);
-          transition: .2s;
-        }
-
-        .toolcard:hover { border-color: #c18aff; transform: translateY(-2px); }
-        .toolcard .emoji { font-size: 30px; }
-        .toolcard h3 { margin: 12px 0 6px; }
-        .toolcard p { color: #a69bb8; font-size: 12px; line-height: 1.6; }
-
-        footer {
-          text-align: center; color: #71677f;
-          font-size: 12px; padding: 35px 0 12px;
-        }
-
-        @media(max-width:800px) {
-          .grid { grid-template-columns: 1fr; }
-        }
-
-        @media(max-width:500px) {
-          .studio { padding: 14px; }
-          .panel { padding: 16px; }
-          .stats { gap: 7px; }
-          .stat { padding: 12px 5px; }
-          .stat strong { font-size: 17px; }
-          .stat span { font-size: 10px; }
-          .toolcards { grid-template-columns: 1fr; }
-          .hero { padding-top: 32px; }
-        }
-      `}</style>
-
-      <div className="shell">
-        <nav className="topbar">
-          <div className="brand">
-            GETYOUR<span>THUMBNAIL</span>
-          </div>
-
-          <div className="nav">
-            <button
-              className={activeTab === "studio" ? "active" : ""}
-              onClick={() => setActiveTab("studio")}
-            >
-              ✦ Thumbnail Studio
-            </button>
-
-            <button onClick={() => (window.location.href = "/enhancer")}>
-              ✨ Image Enhancer
-            </button>
-          </div>
-        </nav>
-
-        <header className="hero">
-          <span className="eyebrow">AI CREATIVE STUDIO</span>
-
-          <h1>
-            Turn Videos Into
-            <br />
-            <span className="gradient">Click-Worthy Thumbnails</span>
-          </h1>
-
-          <p>
-            Your creative workspace for AI-powered video analysis,
-            thumbnail concepts and image enhancement.
-          </p>
-        </header>
-
-        <div className="stats">
-          <div className="stat">
-            <strong>AI</strong>
-            <span>VIDEO ANALYSIS</span>
-          </div>
-          <div className="stat">
-            <strong>04</strong>
-            <span>THUMBNAIL CONCEPTS</span>
-          </div>
-          <div className="stat">
-            <strong>HD</strong>
-            <span>IMAGE WORKSPACE</span>
-          </div>
-        </div>
-
-        <div className="grid">
-          <section className="panel">
-            <h2>01 / Video Workspace</h2>
-            <p className="muted">
-              Upload your video and let AI discover its best thumbnail moments.
-            </p>
-
-            <div
-              className="upload"
-              onClick={() => fileRef.current?.click()}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                uploadVideo(event.dataTransfer.files[0]);
-              }}
-            >
-              <div className="emoji">🎬</div>
-              <strong>Drop your video here</strong>
-              <p className="muted">Or click to browse your files</p>
-              <p className="muted">MP4 and supported video formats</p>
-
-              <input
-                ref={fileRef}
-                hidden
-                type="file"
-                accept="video/*"
-                onChange={(event) => uploadVideo(event.target.files?.[0])}
-              />
-            </div>
-
-            {videoUrl && (
-              <>
-                <video className="video" src={videoUrl} controls playsInline />
-                <p className="muted">{video?.name}</p>
-              </>
-            )}
-
-            <label className="muted" htmlFor="description">
-              VIDEO DESCRIPTION / CREATIVE DIRECTION
-            </label>
-
-            <textarea
-              id="description"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder="Describe your video, its characters, action or thumbnail idea..."
-            />
-
-            <button
-              className="primary"
-              onClick={analyzeVideo}
-              disabled={!video || loading}
-            >
-              {loading ? "◌ ANALYZING VIDEO..." : "✦ ANALYZE VIDEO WITH AI"}
-            </button>
-
-            {message && <div className="message">{message}</div>}
-          </section>
-
-          <section className="panel">
-            <h2>02 / Creative Concepts</h2>
-            <p className="muted">
-              Generate thumbnail ideas and turn your favourite concept into an image.
-            </p>
-
-            {concepts.length === 0 ? (
-              <div className="empty">
-                <div className="emoji">✧</div>
-                <h3>Your creative ideas appear here</h3>
-                <p className="muted">
-                  Upload a video and start AI analysis to see your concepts.
-                </p>
-              </div>
-            ) : (
-              concepts.map((concept, index) => (
-                <article className="concept" key={index}>
-                  <h3>
-                    <span className="gradient">
-                      CONCEPT 0{index + 1}
-                    </span>{" "}
-                    · {concept.title}
-                  </h3>
-
-                  <p>{concept.description}</p>
-
-                  {concept.imageUrl && (
-                    <img src={concept.imageUrl} alt={concept.title} />
-                  )}
-
-                  <button
-                    onClick={() => generateThumbnail(index)}
-                    disabled={generating !== null}
-                  >
-                    {generating === index
-                      ? "GENERATING IMAGE..."
-                      : concept.imageUrl
-                        ? "REGENERATE THUMBNAIL"
-                        : "✦ GENERATE THUMBNAIL"}
-                  </button>
-
-                  {concept.imageUrl && (
-                    <button
-                      style={{ marginTop: 9 }}
-                      onClick={() => downloadImage(concept.imageUrl!, index)}
-                    >
-                      ↓ DOWNLOAD IMAGE
-                    </button>
-                  )}
-                </article>
-              ))
-            )}
-          </section>
-        </div>
-
-        <section style={{ marginTop: 32 }}>
-          <h2 className="gradient">03 / Creative Tools</h2>
-          <p className="muted">
-            Choose the tool you want to work with.
-          </p>
-
-          <div className="toolcards">
-            <a className="toolcard" href="#top">
-              <div className="emoji">🎨</div>
-              <h3>AI Thumbnail Studio</h3>
-              <p>
-                Analyze video scenes, explore four creative concepts,
-                generate thumbnail images and download your results.
-              </p>
-              <span className="gradient">OPEN STUDIO →</span>
-            </a>
-
-            <a className="toolcard" href="/enhancer">
-              <div className="emoji">✨</div>
-              <h3>AI Image Enhancer</h3>
-              <p>
-                Upload an image, enhance it with AI, adjust brightness,
-                contrast and saturation, compare and download.
-              </p>
-              <span className="gradient">OPEN ENHANCER →</span>
-            </a>
-          </div>
-        </section>
-
-        <footer>
-          GETYOURTHUMBNAIL · YOUR AI CREATIVE WORKSPACE
-        </footer>
-      </div>
-    </main>
-  );
-}
-  
