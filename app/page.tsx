@@ -76,6 +76,7 @@ export default function Home() {
   const [captionLanguage, setCaptionLanguage] = useState("Hindi");
   const [captionLoading, setCaptionLoading] = useState(false);
   const [captionStatus, setCaptionStatus] = useState("");
+  const [captionProgress, setCaptionProgress] = useState(0);
   const [captions, setCaptions] = useState<Caption[]>([]);
 
   const [message, setMessage] = useState("");
@@ -102,13 +103,25 @@ export default function Home() {
     setThumbStatus("Video selected. Ready for analysis.");
   }
 
-  function chooseCaptionVideo(file?: File) {
-    if (!file) return;
 
-    if (!file.type.startsWith("video/")) {
-      setCaptionStatus("Please select a valid video file.");
-      return;
-    }
+function chooseCaptionVideo(file?: File) {
+  if (!file) return;
+
+  if (!file.type.startsWith("video/")) {
+    setCaptionStatus("Please select a valid video file.");
+    return;
+  }
+
+  if (file.size > 300 * 1024 * 1024) {
+    setCaptionStatus("Video must be smaller than 300 MB.");
+    return;
+  }
+
+  setCaptionFile(file);
+  setCaptions([]);
+  setCaptionProgress(0);
+  setCaptionStatus("Video selected. Ready for captions.");
+}
 
     if (file.size > 4 * 1024 * 1024) {
       setCaptionStatus("Video must be smaller than 4 MB.");
@@ -273,22 +286,105 @@ export default function Home() {
     }
   }
 
-  async function generateCaptions() {
-    if (!captionFile) return;
+  
+async function generateCaptions() {
+  if (!captionFile) return;
 
-    setCaptionLoading(true);
-    setCaptionStatus("Uploading video for transcription...");
+  setCaptionLoading(true);
+  setCaptionProgress(0);
+  setCaptionStatus("Creating secure upload session...");
 
-    try {
-      const formData = new FormData();
-      formData.append("video", captionFile);
-      formData.append("language", captionLanguage);
-
-      const response = await fetch("/api/captions", {
+  try {
+    // Step 1: Ask our server for a Gemini upload session.
+    const sessionResponse = await fetch(
+      "/api/captions/upload-session",
+      {
         method: "POST",
-        body: formData,
-      });
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fileName: captionFile.name,
+          mimeType: captionFile.type,
+          fileSize: captionFile.size,
+        }),
+      }
+    );
 
+    const sessionData = await sessionResponse.json();
+
+    if (!sessionResponse.ok || !sessionData.uploadUrl) {
+      throw new Error(
+        sessionData.error || "Could not create upload session."
+      );
+    }
+
+    // Step 2: Upload video directly from browser to Gemini.
+    setCaptionStatus("Uploading video directly to Gemini...");
+
+    const uploadResponse = await fetch(sessionData.uploadUrl, {
+      method: "POST",
+      headers: {
+        "Content-Length": String(captionFile.size),
+        "X-Goog-Upload-Offset": "0",
+        "X-Goog-Upload-Command": "upload, finalize",
+      },
+      body: captionFile,
+    });
+
+    const uploadData = await uploadResponse.json();
+
+    if (!uploadResponse.ok) {
+      throw new Error(
+        uploadData.error?.message || "Video upload failed."
+      );
+    }
+
+    const fileName = uploadData.file?.name;
+
+    if (!fileName) {
+      throw new Error("Gemini did not return the uploaded file name.");
+    }
+
+    setCaptionProgress(100);
+    setCaptionStatus("Video uploaded. Generating captions...");
+
+    // Step 3: Ask our server to generate captions.
+    const captionResponse = await fetch("/api/captions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fileName,
+        language: captionLanguage,
+      }),
+    });
+
+    const data = await readApiResponse(captionResponse);
+
+    if (!captionResponse.ok) {
+      throw new Error(
+        data.error || "Caption generation failed."
+      );
+    }
+
+    if (!Array.isArray(data.captions)) {
+      throw new Error("The server returned an invalid captions format.");
+    }
+
+    setCaptions(data.captions);
+    setCaptionStatus("Captions generated successfully.");
+  } catch (error) {
+    setCaptionStatus(
+      error instanceof Error
+        ? error.message
+        : "Something went wrong."
+    );
+  } finally {
+    setCaptionLoading(false);
+  }
+}
       const data = await readApiResponse(response);
 
       if (!response.ok) {
@@ -605,7 +701,7 @@ export default function Home() {
                 <input type="file" accept="video/*" onChange={(e) => chooseCaptionVideo(e.target.files?.[0])} />
                 <span className="upload-symbol">↑</span>
                 <strong>{captionFile ? captionFile.name : "Choose a video"}</strong>
-                <small>Maximum file size: 4 MB</small>
+                <small>Maximum file size: 300 MB</small>
               </label>
 
               <label className="field-label" htmlFor="caption-language">Caption language</label>
@@ -623,10 +719,42 @@ export default function Home() {
                 <option>German</option>
               </select>
 
-              <button className="primary full" disabled={!captionFile || captionLoading} onClick={generateCaptions}>
-                {captionLoading ? "✦ Generating captions..." : "✦ Generate captions"}
-              </button>
+             
+<button
+  className="primary full"
+  disabled={!captionFile || captionLoading}
+  onClick={generateCaptions}
+>
+  {captionLoading
+    ? `✦ Processing... ${captionProgress}%`
+    : "✦ Generate captions"}
+</button>
 
+{captionLoading && (
+  <div
+    style={{
+      width: "100%",
+      height: "8px",
+      background: "#252525",
+      borderRadius: "20px",
+      overflow: "hidden",
+      marginTop: "12px",
+    }}
+  >
+    <div
+      style={{
+        width: `${captionProgress}%`,
+        height: "100%",
+        background: "#8b5cf6",
+        transition: "width 0.3s ease",
+      }}
+    />
+  </div>
+)}
+
+{captionStatus && (
+  <p style={{ marginTop: "10px" }}>{captionStatus}</p>
+)}
               {captionStatus && <div className="status">{captionStatus}</div>}
             </section>
 
