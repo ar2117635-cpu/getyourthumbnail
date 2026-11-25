@@ -79,8 +79,6 @@ export default function Home() {
   const [captionProgress, setCaptionProgress] = useState(0);
   const [captions, setCaptions] = useState<Caption[]>([]);
 
-  const [message, setMessage] = useState("");
-
   useEffect(() => {
     return () => {
       if (generatedImage.startsWith("blob:")) {
@@ -103,33 +101,22 @@ export default function Home() {
     setThumbStatus("Video selected. Ready for analysis.");
   }
 
+  function chooseCaptionVideo(file?: File) {
+    if (!file) return;
 
-function chooseCaptionVideo(file?: File) {
-  if (!file) return;
+    if (!file.type.startsWith("video/")) {
+      setCaptionStatus("Please select a valid video file.");
+      return;
+    }
 
-  if (!file.type.startsWith("video/")) {
-    setCaptionStatus("Please select a valid video file.");
-    return;
-  }
-
-  if (file.size > 300 * 1024 * 1024) {
-    setCaptionStatus("Video must be smaller than 300 MB.");
-    return;
-  }
-
-  setCaptionFile(file);
-  setCaptions([]);
-  setCaptionProgress(0);
-  setCaptionStatus("Video selected. Ready for captions.");
-}
-
-    if (file.size > 4 * 1024 * 1024) {
-      setCaptionStatus("Video must be smaller than 4 MB.");
+    if (file.size > 300 * 1024 * 1024) {
+      setCaptionStatus("Video must be smaller than 300 MB.");
       return;
     }
 
     setCaptionFile(file);
     setCaptions([]);
+    setCaptionProgress(0);
     setCaptionStatus("Video selected. Ready for captions.");
   }
 
@@ -286,108 +273,80 @@ function chooseCaptionVideo(file?: File) {
     }
   }
 
-  
-async function generateCaptions() {
-  if (!captionFile) return;
+  async function generateCaptions() {
+    if (!captionFile) return;
 
-  setCaptionLoading(true);
-  setCaptionProgress(0);
-  setCaptionStatus("Creating secure upload session...");
+    setCaptionLoading(true);
+    setCaptionProgress(0);
+    setCaptionStatus("Creating secure upload session...");
 
-  try {
-    // Step 1: Ask our server for a Gemini upload session.
-    const sessionResponse = await fetch(
-      "/api/captions/upload-session",
-      {
+    try {
+      const sessionResponse = await fetch(
+        "/api/captions/upload-session",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            fileName: captionFile.name,
+            mimeType: captionFile.type,
+            fileSize: captionFile.size,
+          }),
+        }
+      );
+
+      const sessionData = await readApiResponse(sessionResponse);
+
+      if (!sessionResponse.ok || !sessionData.uploadUrl) {
+        throw new Error(
+          sessionData.error || "Could not create upload session."
+        );
+      }
+
+      setCaptionStatus("Uploading video directly to Gemini...");
+
+      const uploadResponse = await fetch(sessionData.uploadUrl, {
+        method: "POST",
+        headers: {
+          "Content-Length": String(captionFile.size),
+          "X-Goog-Upload-Offset": "0",
+          "X-Goog-Upload-Command": "upload, finalize",
+        },
+        body: captionFile,
+      });
+
+      const uploadData = await readApiResponse(uploadResponse);
+
+      if (!uploadResponse.ok) {
+        throw new Error(
+          uploadData.error?.message || "Video upload failed."
+        );
+      }
+
+      const fileName = uploadData.file?.name;
+
+      if (!fileName) {
+        throw new Error("Gemini did not return the uploaded file name.");
+      }
+
+      setCaptionProgress(100);
+      setCaptionStatus("Video uploaded. Generating captions...");
+
+      const captionResponse = await fetch("/api/captions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          fileName: captionFile.name,
-          mimeType: captionFile.type,
-          fileSize: captionFile.size,
+          fileName,
+          language: captionLanguage,
         }),
-      }
-    );
+      });
 
-    const sessionData = await sessionResponse.json();
+      const data = await readApiResponse(captionResponse);
 
-    if (!sessionResponse.ok || !sessionData.uploadUrl) {
-      throw new Error(
-        sessionData.error || "Could not create upload session."
-      );
-    }
-
-    // Step 2: Upload video directly from browser to Gemini.
-    setCaptionStatus("Uploading video directly to Gemini...");
-
-    const uploadResponse = await fetch(sessionData.uploadUrl, {
-      method: "POST",
-      headers: {
-        "Content-Length": String(captionFile.size),
-        "X-Goog-Upload-Offset": "0",
-        "X-Goog-Upload-Command": "upload, finalize",
-      },
-      body: captionFile,
-    });
-
-    const uploadData = await uploadResponse.json();
-
-    if (!uploadResponse.ok) {
-      throw new Error(
-        uploadData.error?.message || "Video upload failed."
-      );
-    }
-
-    const fileName = uploadData.file?.name;
-
-    if (!fileName) {
-      throw new Error("Gemini did not return the uploaded file name.");
-    }
-
-    setCaptionProgress(100);
-    setCaptionStatus("Video uploaded. Generating captions...");
-
-    // Step 3: Ask our server to generate captions.
-    const captionResponse = await fetch("/api/captions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        fileName,
-        language: captionLanguage,
-      }),
-    });
-
-    const data = await readApiResponse(captionResponse);
-
-    if (!captionResponse.ok) {
-      throw new Error(
-        data.error || "Caption generation failed."
-      );
-    }
-
-    if (!Array.isArray(data.captions)) {
-      throw new Error("The server returned an invalid captions format.");
-    }
-
-    setCaptions(data.captions);
-    setCaptionStatus("Captions generated successfully.");
-  } catch (error) {
-    setCaptionStatus(
-      error instanceof Error
-        ? error.message
-        : "Something went wrong."
-    );
-  } finally {
-    setCaptionLoading(false);
-  }
-}
-      const data = await readApiResponse(response);
-
-      if (!response.ok) {
+      if (!captionResponse.ok) {
         throw new Error(data.error || "Caption generation failed.");
       }
 
@@ -399,7 +358,9 @@ async function generateCaptions() {
       setCaptionStatus("Captions generated successfully.");
     } catch (error) {
       setCaptionStatus(
-        error instanceof Error ? error.message : "Something went wrong."
+        error instanceof Error
+          ? error.message
+          : "Something went wrong."
       );
     } finally {
       setCaptionLoading(false);
@@ -442,8 +403,7 @@ async function generateCaptions() {
     link.download = `getyourthumbnail-${thumbAspectRatio.replace(":", "x")}.jpg`;
     link.click();
   }
-
-  return (
+    return (
     <main className={dark ? "app dark" : "app light"}>
       <aside className="sidebar">
         <div className="brand">
@@ -459,7 +419,13 @@ async function generateCaptions() {
             className={`nav-item ${active === item ? "selected" : ""}`}
             onClick={() => setActive(item)}
           >
-            <span>{item === "Dashboard" ? "⌂" : item === "Thumbnail Studio" ? "✦" : "CC"}</span>
+            <span>
+              {item === "Dashboard"
+                ? "⌂"
+                : item === "Thumbnail Studio"
+                  ? "✦"
+                  : "CC"}
+            </span>
             {item}
           </button>
         ))}
@@ -485,6 +451,7 @@ async function generateCaptions() {
             <span>⚙</span>
             Settings
           </button>
+
           <div className="sidebar-note">
             <span className="online-dot" /> Creator workspace
             <small>Make something extraordinary.</small>
@@ -494,7 +461,10 @@ async function generateCaptions() {
 
       <section className="main-area">
         <header className="topbar">
-          <div className="breadcrumb">Workspace <span>/</span> {active}</div>
+          <div className="breadcrumb">
+            Workspace <span>/</span> {active}
+          </div>
+
           <div className="top-actions">
             <span className="online-label">● All systems ready</span>
             <button className="theme-button" onClick={() => setDark(!dark)}>
@@ -508,12 +478,21 @@ async function generateCaptions() {
             <section className="hero">
               <div>
                 <span className="eyebrow">YOUR CREATIVE COMMAND CENTER</span>
-                <h1>Make something<br /><em>extraordinary.</em></h1>
+                <h1>
+                  Make something
+                  <br />
+                  <em>extraordinary.</em>
+                </h1>
                 <p>Your ideas deserve content that gets noticed.</p>
-                <button className="primary hero-button" onClick={() => setActive("Thumbnail Studio")}>
+
+                <button
+                  className="primary hero-button"
+                  onClick={() => setActive("Thumbnail Studio")}
+                >
                   ✦ Create a thumbnail →
                 </button>
               </div>
+
               <div className="hero-art">
                 <div className="orbit orbit-a" />
                 <div className="orbit orbit-b" />
@@ -523,33 +502,73 @@ async function generateCaptions() {
             </section>
 
             <div className="stats">
-              <div className="stat"><span>✦</span><small>AI TOOLS</small><strong>03</strong><p>Creative workspaces</p></div>
-              <div className="stat"><span>CC</span><small>CAPTION STUDIO</small><strong>Ready</strong><p>Automatic subtitles</p></div>
-              <div className="stat"><span>◈</span><small>IMAGE ENHANCER</small><strong>Ready</strong><p>Browser-based enhancement</p></div>
-              <div className="stat"><span>◉</span><small>WORKSPACE</small><strong className="active-text">Active</strong><p>Ready to create</p></div>
+              <div className="stat">
+                <span>✦</span>
+                <small>AI TOOLS</small>
+                <strong>03</strong>
+                <p>Creative workspaces</p>
+              </div>
+
+              <div className="stat">
+                <span>CC</span>
+                <small>CAPTION STUDIO</small>
+                <strong>Ready</strong>
+                <p>Automatic subtitles</p>
+              </div>
+
+              <div className="stat">
+                <span>◈</span>
+                <small>IMAGE ENHANCER</small>
+                <strong>Ready</strong>
+                <p>Browser-based enhancement</p>
+              </div>
+
+              <div className="stat">
+                <span>◉</span>
+                <small>WORKSPACE</small>
+                <strong className="active-text">Active</strong>
+                <p>Ready to create</p>
+              </div>
             </div>
 
             <div className="section-title">
-              <div><h2>Creative workspace</h2><p>Choose a tool to start creating.</p></div>
+              <div>
+                <h2>Creative workspace</h2>
+                <p>Choose a tool to start creating.</p>
+              </div>
             </div>
 
             <div className="tools">
-              <button className="tool" onClick={() => setActive("Thumbnail Studio")}>
+              <button
+                className="tool"
+                onClick={() => setActive("Thumbnail Studio")}
+              >
                 <span className="tool-icon purple">✦</span>
                 <h3>Thumbnail Studio</h3>
-                <p>Analyze your video and generate thumbnail concepts with AI.</p>
+                <p>
+                  Analyze your video and generate thumbnail concepts with AI.
+                </p>
                 <b>Open studio →</b>
               </button>
+
               <Link className="tool" href="/enhancer">
                 <span className="tool-icon blue">◈</span>
                 <h3>Image Enhancer</h3>
-                <p>Improve image quality and resolution in your browser.</p>
+                <p>
+                  Improve image quality and resolution in your browser.
+                </p>
                 <b>Open enhancer →</b>
               </Link>
-              <button className="tool" onClick={() => setActive("AI Caption Studio")}>
+
+              <button
+                className="tool"
+                onClick={() => setActive("AI Caption Studio")}
+              >
                 <span className="tool-icon pink">CC</span>
                 <h3>AI Caption Studio</h3>
-                <p>Transcribe speech and export editable subtitle files.</p>
+                <p>
+                  Transcribe speech and export editable subtitle files.
+                </p>
                 <b>Open caption studio →</b>
               </button>
             </div>
@@ -557,55 +576,116 @@ async function generateCaptions() {
             <section className="seo-section">
               <span className="eyebrow">GETYOURTHUMBNAIL</span>
               <h2>AI tools for your creator workflow</h2>
-              <p>GetYourThumbnail brings video-based thumbnail ideas, AI-assisted image creation, subtitle transcription and image enhancement into one simple creator workspace. Upload content you have the right to use, review AI results, and download your outputs.</p>
+              <p>
+                GetYourThumbnail brings video-based thumbnail ideas, AI-assisted
+                image creation, subtitle transcription and image enhancement
+                into one simple creator workspace. Upload content you have the
+                right to use, review AI results, and download your outputs.
+              </p>
+
               <div className="seo-grid">
-                <article><h3>AI Thumbnail Concepts</h3><p>Analyze selected video frames and explore creative thumbnail directions.</p></article>
-                <article><h3>Subtitle Export</h3><p>Generate speech captions and export SRT or VTT subtitle files.</p></article>
-                <article><h3>Image Enhancement</h3><p>Open the image enhancer to process supported images on your device.</p></article>
+                <article>
+                  <h3>AI Thumbnail Concepts</h3>
+                  <p>
+                    Analyze selected video frames and explore creative
+                    thumbnail directions.
+                  </p>
+                </article>
+
+                <article>
+                  <h3>Subtitle Export</h3>
+                  <p>
+                    Generate speech captions and export SRT or VTT subtitle
+                    files.
+                  </p>
+                </article>
+
+                <article>
+                  <h3>Image Enhancement</h3>
+                  <p>
+                    Open the image enhancer to process supported images on your
+                    device.
+                  </p>
+                </article>
               </div>
             </section>
           </div>
         )}
-                        {active === "Thumbnail Studio" && (
+
+        {active === "Thumbnail Studio" && (
           <div className="page">
             <div className="heading">
               <div>
                 <span className="eyebrow">AI CREATIVE WORKSPACE</span>
-                <h1>Thumbnail Studio <em>✦</em></h1>
-                <p>Analyze your video, choose a creative direction and generate a thumbnail.</p>
+                <h1>
+                  Thumbnail Studio <em>✦</em>
+                </h1>
+                <p>
+                  Analyze your video, choose a creative direction and generate
+                  a thumbnail.
+                </p>
               </div>
+
               <span className="ready">● AI WORKFLOW</span>
             </div>
-                        <div className="studio-grid">
+
+            <div className="studio-grid">
               <section className="panel">
                 <div className="panel-heading">
                   <b>01</b>
-                  <div><h3>Upload your video</h3><p>We sample a few frames in your browser for analysis.</p></div>
+                  <div>
+                    <h3>Upload your video</h3>
+                    <p>
+                      We sample a few frames in your browser for analysis.
+                    </p>
+                  </div>
                 </div>
 
                 <label className="dropzone">
-                  <input type="file" accept="video/*" onChange={(e) => chooseThumbVideo(e.target.files?.[0])} />
+                  <input
+                    type="file"
+                    accept="video/*"
+                    onChange={(e) => chooseThumbVideo(e.target.files?.[0])}
+                  />
                   <span className="upload-symbol">↑</span>
-                  <strong>{thumbFile ? thumbFile.name : "Choose a video"}</strong>
+                  <strong>
+                    {thumbFile ? thumbFile.name : "Choose a video"}
+                  </strong>
                   <small>MP4 · MOV · WEBM</small>
                   <small>Frame analysis happens in your browser.</small>
                 </label>
 
-                <label className="field-label" htmlFor="thumbnail-format">Thumbnail format</label>
+                <label className="field-label" htmlFor="thumbnail-format">
+                  Thumbnail format
+                </label>
+
                 <select
                   id="thumbnail-format"
                   className="text-field"
                   value={thumbAspectRatio}
                   onChange={(e) => setThumbAspectRatio(e.target.value)}
                 >
-                  <option value="16:9">16:9 — YouTube Thumbnail (1536 × 864)</option>
-                  <option value="9:16">9:16 — Shorts / Reels (864 × 1536)</option>
-                  <option value="1:1">1:1 — Square Post (1024 × 1024)</option>
-                  <option value="4:5">4:5 — Instagram Portrait (1024 × 1280)</option>
-                  <option value="4:3">4:3 — Classic Thumbnail (1280 × 960)</option>
+                  <option value="16:9">
+                    16:9 — YouTube Thumbnail (1536 × 864)
+                  </option>
+                  <option value="9:16">
+                    9:16 — Shorts / Reels (864 × 1536)
+                  </option>
+                  <option value="1:1">
+                    1:1 — Square Post (1024 × 1024)
+                  </option>
+                  <option value="4:5">
+                    4:5 — Instagram Portrait (1024 × 1280)
+                  </option>
+                  <option value="4:3">
+                    4:3 — Classic Thumbnail (1280 × 960)
+                  </option>
                 </select>
 
-                <label className="field-label">Video context (optional)</label>
+                <label className="field-label">
+                  Video context (optional)
+                </label>
+
                 <textarea
                   className="text-field"
                   rows={4}
@@ -614,17 +694,28 @@ async function generateCaptions() {
                   placeholder="Describe the video topic, main subject, game, mood or important moment..."
                 />
 
-                <button className="primary full" disabled={!thumbFile || thumbLoading} onClick={analyzeVideo}>
-                  {thumbLoading ? "✦ Working..." : "✦ Analyze video & create concepts"}
+                <button
+                  className="primary full"
+                  disabled={!thumbFile || thumbLoading}
+                  onClick={analyzeVideo}
+                >
+                  {thumbLoading
+                    ? "✦ Working..."
+                    : "✦ Analyze video & create concepts"}
                 </button>
 
-                {thumbStatus && <div className="status">{thumbStatus}</div>}
+                {thumbStatus && (
+                  <div className="status">{thumbStatus}</div>
+                )}
               </section>
 
               <section className="panel">
                 <div className="panel-heading">
                   <b>02</b>
-                  <div><h3>Choose your concept</h3><p>Select the creative direction you like.</p></div>
+                  <div>
+                    <h3>Choose your concept</h3>
+                    <p>Select the creative direction you like.</p>
+                  </div>
                 </div>
 
                 {concepts.length === 0 ? (
@@ -638,15 +729,23 @@ async function generateCaptions() {
                     {concepts.map((concept, index) => (
                       <button
                         key={index}
-                        className={`concept ${selectedConcept === index ? "concept-active" : ""}`}
+                        className={`concept ${
+                          selectedConcept === index ? "concept-active" : ""
+                        }`}
                         onClick={() => setSelectedConcept(index)}
                       >
-                        <span className="concept-number">0{index + 1}</span>
+                        <span className="concept-number">
+                          0{index + 1}
+                        </span>
+
                         <span className="concept-copy">
                           <strong>{concept.title}</strong>
                           <small>{concept.description}</small>
                         </span>
-                        <span className="concept-check">{selectedConcept === index ? "✓" : "○"}</span>
+
+                        <span className="concept-check">
+                          {selectedConcept === index ? "✓" : "○"}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -666,15 +765,24 @@ async function generateCaptions() {
               <section className="panel result-panel">
                 <div className="panel-heading">
                   <b>03</b>
-                  <div><h3>Your generated thumbnail</h3><p>Review and download your result.</p></div>
+                  <div>
+                    <h3>Your generated thumbnail</h3>
+                    <p>Review and download your result.</p>
+                  </div>
                 </div>
+
                 <img
                   className="generated-image"
                   src={generatedImage}
                   alt={`Generated ${thumbAspectRatio} thumbnail`}
-                  style={{ aspectRatio: thumbAspectRatio.replace(":", " / ") }}
+                  style={{
+                    aspectRatio: thumbAspectRatio.replace(":", " / "),
+                  }}
                 />
-                <button className="primary" onClick={downloadThumbnail}>↓ Download thumbnail</button>
+
+                <button className="primary" onClick={downloadThumbnail}>
+                  ↓ Download thumbnail
+                </button>
               </section>
             )}
           </div>
@@ -685,26 +793,44 @@ async function generateCaptions() {
             <div className="heading">
               <div>
                 <span className="eyebrow">VIDEO SUBTITLE WORKSPACE</span>
-                <h1>AI Caption Studio <em>CC</em></h1>
-                <p>Transcribe your video and export editable subtitle files.</p>
+                <h1>
+                  AI Caption Studio <em>CC</em>
+                </h1>
+                <p>
+                  Transcribe your video and export editable subtitle files.
+                </p>
               </div>
+
               <span className="ready">● CAPTION WORKFLOW</span>
             </div>
 
             <section className="panel caption-panel">
               <div className="panel-heading">
                 <b>01</b>
-                <div><h3>Upload your video</h3><p>Choose a video up to 4 MB for transcription.</p></div>
+                <div>
+                  <h3>Upload your video</h3>
+                  <p>Choose a video up to 300 MB for transcription.</p>
+                </div>
               </div>
 
               <label className="dropzone">
-                <input type="file" accept="video/*" onChange={(e) => chooseCaptionVideo(e.target.files?.[0])} />
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={(e) => chooseCaptionVideo(e.target.files?.[0])}
+                />
+
                 <span className="upload-symbol">↑</span>
-                <strong>{captionFile ? captionFile.name : "Choose a video"}</strong>
+                <strong>
+                  {captionFile ? captionFile.name : "Choose a video"}
+                </strong>
                 <small>Maximum file size: 300 MB</small>
               </label>
 
-              <label className="field-label" htmlFor="caption-language">Caption language</label>
+              <label className="field-label" htmlFor="caption-language">
+                Caption language
+              </label>
+
               <select
                 id="caption-language"
                 className="text-field"
@@ -719,63 +845,55 @@ async function generateCaptions() {
                 <option>German</option>
               </select>
 
-             
-<button
-  className="primary full"
-  disabled={!captionFile || captionLoading}
-  onClick={generateCaptions}
->
-  {captionLoading
-    ? `✦ Processing... ${captionProgress}%`
-    : "✦ Generate captions"}
-</button>
+              <button
+                className="primary full"
+                disabled={!captionFile || captionLoading}
+                onClick={generateCaptions}
+              >
+                {captionLoading
+                  ? `✦ Processing... ${captionProgress}%`
+                  : "✦ Generate captions"}
+              </button>
 
-{captionLoading && (
-  <div
-    style={{
-      width: "100%",
-      height: "8px",
-      background: "#252525",
-      borderRadius: "20px",
-      overflow: "hidden",
-      marginTop: "12px",
-    }}
-  >
-    <div
-      style={{
-        width: `${captionProgress}%`,
-        height: "100%",
-        background: "#8b5cf6",
-        transition: "width 0.3s ease",
-      }}
-    />
-  </div>
-)}
+              {captionLoading && (
+                <div className="progress-track">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${captionProgress}%` }}
+                  />
+                </div>
+              )}
 
-{captionStatus && (
-  <p style={{ marginTop: "10px" }}>{captionStatus}</p>
-)}
-              {captionStatus && <div className="status">{captionStatus}</div>}
+              {captionStatus && (
+                <div className="status">{captionStatus}</div>
+              )}
             </section>
 
             {captions.length > 0 && (
               <section className="panel caption-results">
                 <div className="section-title">
-                  <div><h2>Your captions</h2><p>Edit the text before exporting.</p></div>
+                  <div>
+                    <h2>Your captions</h2>
+                    <p>Edit the text before exporting.</p>
+                  </div>
                 </div>
 
                 {captions.map((caption, index) => (
                   <div className="caption-row" key={index}>
                     <div className="caption-time">
-                      {caption.start.toFixed(2)}s – {caption.end.toFixed(2)}s
+                      {caption.start.toFixed(2)}s –{" "}
+                      {caption.end.toFixed(2)}s
                     </div>
+
                     <textarea
                       className="text-field caption-edit"
                       value={caption.text}
                       onChange={(e) => {
                         setCaptions((previous) =>
                           previous.map((item, i) =>
-                            i === index ? { ...item, text: e.target.value } : item
+                            i === index
+                              ? { ...item, text: e.target.value }
+                              : item
                           )
                         );
                       }}
@@ -784,16 +902,27 @@ async function generateCaptions() {
                 ))}
 
                 <div className="export-actions">
-                  <button className="primary" onClick={exportSrt}>↓ Export SRT</button>
-                  <button className="secondary" onClick={exportVtt}>↓ Export VTT</button>
+                  <button className="primary" onClick={exportSrt}>
+                    ↓ Export SRT
+                  </button>
+
+                  <button className="secondary" onClick={exportVtt}>
+                    ↓ Export VTT
+                  </button>
                 </div>
-                <p className="small-note">These files contain subtitles. This version does not burn captions directly into the MP4 video.</p>
+
+                <p className="small-note">
+                  These files contain subtitles. This version does not burn
+                  captions directly into the MP4 video.
+                </p>
               </section>
             )}
           </div>
         )}
 
-        {["My Projects", "Download History", "Favorites", "Settings"].includes(active) && (
+        {["My Projects", "Download History", "Favorites", "Settings"].includes(
+          active
+        ) && (
           <div className="page">
             <div className="heading">
               <div>
@@ -806,9 +935,20 @@ async function generateCaptions() {
             <section className="panel empty-state">
               <span>◈</span>
               <h2>{active}</h2>
-              <p>Cloud storage and saved project history are not connected in this version.</p>
-              <p>Your generated files can be downloaded directly to your device.</p>
-              <button className="primary" onClick={() => setActive("Dashboard")}>Back to Dashboard</button>
+              <p>
+                Cloud storage and saved project history are not connected in
+                this version.
+              </p>
+              <p>
+                Your generated files can be downloaded directly to your device.
+              </p>
+
+              <button
+                className="primary"
+                onClick={() => setActive("Dashboard")}
+              >
+                Back to Dashboard
+              </button>
             </section>
           </div>
         )}
@@ -820,10 +960,24 @@ async function generateCaptions() {
       </section>
 
       <style jsx global>{`
-        * { box-sizing: border-box; }
-        body { margin: 0; }
-        button, input, textarea, select { font: inherit; }
-        button { cursor: pointer; }
+        * {
+          box-sizing: border-box;
+        }
+
+        body {
+          margin: 0;
+        }
+
+        button,
+        input,
+        textarea,
+        select {
+          font: inherit;
+        }
+
+        button {
+          cursor: pointer;
+        }
 
         .app {
           --bg: #0b0914;
@@ -881,8 +1035,17 @@ async function generateCaptions() {
           font-size: 20px;
         }
 
-        .brand-highlight { color: var(--purple); }
-        .nav-label { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; margin: 20px 10px 10px; }
+        .brand-highlight {
+          color: var(--purple);
+        }
+
+        .nav-label {
+          color: var(--muted);
+          font-size: 10px;
+          letter-spacing: 1.5px;
+          margin: 20px 10px 10px;
+        }
+
         .nav-item {
           border: 0;
           width: 100%;
@@ -898,14 +1061,49 @@ async function generateCaptions() {
           font-size: 13px;
         }
 
-        .nav-item span { width: 20px; text-align: center; }
-        .nav-item:hover, .nav-item.selected { background: #33234d; color: white; }
-        .sidebar-bottom { margin-top: auto; }
-        .sidebar-note { margin: 20px 4px 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: 11px; }
-        .sidebar-note small { display: block; margin-top: 8px; }
-        .online-dot { display: inline-block; width: 7px; height: 7px; background: #49d99b; border-radius: 50%; margin-right: 6px; }
+        .nav-item span {
+          width: 20px;
+          text-align: center;
+        }
 
-        .main-area { flex: 1; min-width: 0; }
+        .nav-item:hover,
+        .nav-item.selected {
+          background: #33234d;
+          color: white;
+        }
+
+        .sidebar-bottom {
+          margin-top: auto;
+        }
+
+        .sidebar-note {
+          margin: 20px 4px 0;
+          padding: 14px;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          color: var(--muted);
+          font-size: 11px;
+        }
+
+        .sidebar-note small {
+          display: block;
+          margin-top: 8px;
+        }
+
+        .online-dot {
+          display: inline-block;
+          width: 7px;
+          height: 7px;
+          background: #49d99b;
+          border-radius: 50%;
+          margin-right: 6px;
+        }
+
+        .main-area {
+          flex: 1;
+          min-width: 0;
+        }
+
         .topbar {
           height: 68px;
           padding: 0 35px;
@@ -916,11 +1114,28 @@ async function generateCaptions() {
           background: var(--panel);
         }
 
-        .breadcrumb { color: var(--muted); font-size: 12px; }
-        .breadcrumb span { margin: 0 10px; }
-        .top-actions { display: flex; align-items: center; gap: 18px; }
-        .online-label { color: #54d9a0; font-size: 11px; }
-        .theme-button, .secondary {
+        .breadcrumb {
+          color: var(--muted);
+          font-size: 12px;
+        }
+
+        .breadcrumb span {
+          margin: 0 10px;
+        }
+
+        .top-actions {
+          display: flex;
+          align-items: center;
+          gap: 18px;
+        }
+
+        .online-label {
+          color: #54d9a0;
+          font-size: 11px;
+        }
+
+        .theme-button,
+        .secondary {
           background: var(--panel2);
           color: var(--text);
           border: 1px solid var(--line);
@@ -929,7 +1144,12 @@ async function generateCaptions() {
           font-size: 12px;
         }
 
-        .page { max-width: 1400px; margin: auto; padding: 38px 40px 50px; }
+        .page {
+          max-width: 1400px;
+          margin: auto;
+          padding: 38px 40px 50px;
+        }
+
         .hero {
           min-height: 270px;
           padding: 38px 45px;
@@ -939,13 +1159,42 @@ async function generateCaptions() {
           overflow: hidden;
           border: 1px solid #493467;
           border-radius: 18px;
-          background: radial-gradient(ellipse at 80% 50%, #46266f 0%, #211534 42%, #171123 100%);
+          background: radial-gradient(
+            ellipse at 80% 50%,
+            #46266f 0%,
+            #211534 42%,
+            #171123 100%
+          );
         }
 
-        .eyebrow { color: #bd8aff; font-size: 10px; letter-spacing: 2px; font-weight: 700; }
-        .hero h1, .heading h1 { font-size: clamp(30px, 4vw, 46px); line-height: 1.12; margin: 15px 0 10px; letter-spacing: -1.5px; }
-        .hero h1 em, .heading h1 em { color: #b98aff; font-style: normal; }
-        .hero p, .heading p { color: #b7adc9; font-size: 13px; line-height: 1.7; }
+        .eyebrow {
+          color: #bd8aff;
+          font-size: 10px;
+          letter-spacing: 2px;
+          font-weight: 700;
+        }
+
+        .hero h1,
+        .heading h1 {
+          font-size: clamp(30px, 4vw, 46px);
+          line-height: 1.12;
+          margin: 15px 0 10px;
+          letter-spacing: -1.5px;
+        }
+
+        .hero h1 em,
+        .heading h1 em {
+          color: #b98aff;
+          font-style: normal;
+        }
+
+        .hero p,
+        .heading p {
+          color: #b7adc9;
+          font-size: 13px;
+          line-height: 1.7;
+        }
+
         .primary {
           border: 0;
           border-radius: 9px;
@@ -957,54 +1206,279 @@ async function generateCaptions() {
           box-shadow: 0 7px 22px #713bc833;
         }
 
-        .primary:hover { filter: brightness(1.12); }
-        .primary:disabled { opacity: .45; cursor: not-allowed; }
-        .hero-button { margin-top: 14px; }
-        .hero-art { width: 240px; height: 190px; position: relative; display: grid; place-items: center; }
-        .orbit { position: absolute; border: 1px solid #b98aff55; border-radius: 50%; transform: rotate(-25deg); }
-        .orbit-a { width: 210px; height: 90px; }
-        .orbit-b { width: 150px; height: 180px; transform: rotate(45deg); }
-        .hero-gem { width: 85px; height: 85px; display: grid; place-items: center; border-radius: 25px; transform: rotate(45deg); background: linear-gradient(135deg, #d6aaff, #7135d6); box-shadow: 0 0 65px #a66bff88; color: white; font-size: 42px; }
-        .hero-art i { position: absolute; right: 20px; top: 10px; color: #e1c4ff; font-size: 30px; }
+        .primary:hover {
+          filter: brightness(1.12);
+        }
 
-        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 24px 0 35px; }
-        .stat, .panel, .tool { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; }
-        .stat { padding: 18px; }
-        .stat span { color: #b98aff; font-size: 17px; }
-        .stat small { display: block; color: var(--muted); font-size: 9px; letter-spacing: 1px; margin-top: 12px; }
-        .stat strong { display: block; font-size: 22px; margin-top: 5px; }
-        .stat p { color: var(--muted); font-size: 11px; margin-bottom: 0; }
-        .active-text { color: #54d9a0; }
+        .primary:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
 
-        .section-title { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 16px; }
-        .section-title h2 { font-size: 19px; margin: 0 0 6px; }
-        .section-title p { color: var(--muted); font-size: 12px; margin: 0; }
-        .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
-        .tool { display: block; text-align: left; text-decoration: none; color: var(--text); padding: 22px; min-height: 195px; transition: .2s; }
-        .tool:hover { border-color: #9a65e8; transform: translateY(-3px); }
-        .tool-icon { width: 39px; height: 39px; display: grid; place-items: center; border-radius: 11px; font-weight: 800; }
-        .purple { background: #633b8d; color: #e5c7ff; }
-        .blue { background: #244d78; color: #a7d5ff; }
-        .pink { background: #713b70; color: #ffc4ed; }
-        .tool h3 { font-size: 15px; margin: 16px 0 8px; }
-        .tool p { color: var(--muted); font-size: 11px; line-height: 1.6; min-height: 35px; }
-        .tool b { display: block; color: #bd8aff; font-size: 11px; margin-top: 14px; }
+        .hero-button {
+          margin-top: 14px;
+        }
 
-        .seo-section { margin-top: 40px; padding: 27px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
-        .seo-section h2 { font-size: 21px; margin: 12px 0; }
-        .seo-section > p, .seo-grid p { color: var(--muted); font-size: 12px; line-height: 1.8; }
-        .seo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 22px; }
-        .seo-grid h3 { font-size: 13px; }
+        .hero-art {
+          width: 240px;
+          height: 190px;
+          position: relative;
+          display: grid;
+          place-items: center;
+        }
 
-        .heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 28px; }
-        .heading h1 { font-size: 34px; }
-        .ready { color: #55dba0; font-size: 10px; white-space: nowrap; }
-        .studio-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-        .panel { padding: 24px; min-width: 0; }
-        .panel-heading { display: flex; gap: 13px; align-items: flex-start; margin-bottom: 20px; }
-        .panel-heading > b { color: #bd8aff; font-size: 13px; }
-        .panel-heading h3 { margin: 0 0 6px; font-size: 15px; }
-        .panel-heading p { color: var(--muted); margin: 0; font-size: 11px; line-height: 1.5; }
+        .orbit {
+          position: absolute;
+          border: 1px solid #b98aff55;
+          border-radius: 50%;
+          transform: rotate(-25deg);
+        }
+
+        .orbit-a {
+          width: 210px;
+          height: 90px;
+        }
+
+        .orbit-b {
+          width: 150px;
+          height: 180px;
+          transform: rotate(45deg);
+        }
+
+        .hero-gem {
+          width: 85px;
+          height: 85px;
+          display: grid;
+          place-items: center;
+          border-radius: 25px;
+          transform: rotate(45deg);
+          background: linear-gradient(135deg, #d6aaff, #7135d6);
+          box-shadow: 0 0 65px #a66bff88;
+          color: white;
+          font-size: 42px;
+        }
+
+        .hero-art i {
+          position: absolute;
+          right: 20px;
+          top: 10px;
+          color: #e1c4ff;
+          font-size: 30px;
+        }
+
+        .stats {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 14px;
+          margin: 24px 0 35px;
+        }
+
+        .stat,
+        .panel,
+        .tool {
+          background: var(--panel);
+          border: 1px solid var(--line);
+          border-radius: 13px;
+        }
+
+        .stat {
+          padding: 18px;
+        }
+
+        .stat span {
+          color: #b98aff;
+          font-size: 17px;
+        }
+
+        .stat small {
+          display: block;
+          color: var(--muted);
+          font-size: 9px;
+          letter-spacing: 1px;
+          margin-top: 12px;
+        }
+
+        .stat strong {
+          display: block;
+          font-size: 22px;
+          margin-top: 5px;
+        }
+
+        .stat p {
+          color: var(--muted);
+          font-size: 11px;
+          margin-bottom: 0;
+        }
+
+        .active-text {
+          color: #54d9a0;
+        }
+
+        .section-title {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin: 28px 0 16px;
+        }
+
+        .section-title h2 {
+          font-size: 19px;
+          margin: 0 0 6px;
+        }
+
+        .section-title p {
+          color: var(--muted);
+          font-size: 12px;
+          margin: 0;
+        }
+
+        .tools {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 15px;
+        }
+
+        .tool {
+          display: block;
+          text-align: left;
+          text-decoration: none;
+          color: var(--text);
+          padding: 22px;
+          min-height: 195px;
+          transition: 0.2s;
+        }
+
+        .tool:hover {
+          border-color: #9a65e8;
+          transform: translateY(-3px);
+        }
+
+        .tool-icon {
+          width: 39px;
+          height: 39px;
+          display: grid;
+          place-items: center;
+          border-radius: 11px;
+          font-weight: 800;
+        }
+
+        .purple {
+          background: #633b8d;
+          color: #e5c7ff;
+        }
+
+        .blue {
+          background: #244d78;
+          color: #a7d5ff;
+        }
+
+        .pink {
+          background: #713b70;
+          color: #ffc4ed;
+        }
+
+        .tool h3 {
+          font-size: 15px;
+          margin: 16px 0 8px;
+        }
+
+        .tool p {
+          color: var(--muted);
+          font-size: 11px;
+          line-height: 1.6;
+          min-height: 35px;
+        }
+
+        .tool b {
+          display: block;
+          color: #bd8aff;
+          font-size: 11px;
+          margin-top: 14px;
+        }
+
+        .seo-section {
+          margin-top: 40px;
+          padding: 27px;
+          border: 1px solid var(--line);
+          border-radius: 14px;
+          background: var(--panel);
+        }
+
+        .seo-section h2 {
+          font-size: 21px;
+          margin: 12px 0;
+        }
+
+        .seo-section > p,
+        .seo-grid p {
+          color: var(--muted);
+          font-size: 12px;
+          line-height: 1.8;
+        }
+
+        .seo-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 20px;
+          margin-top: 22px;
+        }
+
+        .seo-grid h3 {
+          font-size: 13px;
+        }
+
+        .heading {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+          margin-bottom: 28px;
+        }
+
+        .heading h1 {
+          font-size: 34px;
+        }
+
+        .ready {
+          color: #55dba0;
+          font-size: 10px;
+          white-space: nowrap;
+        }
+
+        .studio-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+        }
+
+        .panel {
+          padding: 24px;
+          min-width: 0;
+        }
+
+        .panel-heading {
+          display: flex;
+          gap: 13px;
+          align-items: flex-start;
+          margin-bottom: 20px;
+        }
+
+        .panel-heading > b {
+          color: #bd8aff;
+          font-size: 13px;
+        }
+
+        .panel-heading h3 {
+          margin: 0 0 6px;
+          font-size: 15px;
+        }
+
+        .panel-heading p {
+          color: var(--muted);
+          margin: 0;
+          font-size: 11px;
+          line-height: 1.5;
+        }
 
         .dropzone {
           min-height: 155px;
@@ -1022,69 +1496,348 @@ async function generateCaptions() {
           overflow-wrap: anywhere;
         }
 
-        .dropzone input { display: none; }
-        .upload-symbol { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: #593783; color: white; font-size: 22px; }
-        .dropzone strong { font-size: 12px; }
-        .dropzone small { color: var(--muted); font-size: 10px; }
-        .field-label { display: block; margin: 19px 0 8px; color: var(--muted); font-size: 11px; }
-        .text-field { display: block; width: 100%; padding: 12px; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; outline: none; font-size: 12px; resize: vertical; }
-        .text-field:focus { border-color: #a66bff; }
-        .full { width: 100%; margin-top: 15px; }
-        .status { margin-top: 14px; padding: 11px; border-radius: 8px; background: var(--panel2); color: #c8a6ff; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+        .dropzone input {
+          display: none;
+        }
 
-        .empty-state { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-        .empty-state > span { color: #bd8aff; font-size: 35px; }
-        .empty-state h3, .empty-state h2 { font-size: 16px; }
-        .empty-state p { color: var(--muted); font-size: 12px; line-height: 1.7; }
-        .concept-list { display: grid; gap: 9px; margin-bottom: 15px; }
-        .concept { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; padding: 13px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); }
-        .concept-active { border-color: #a66bff; background: #38244f; }
-        .concept-number { color: #bd8aff; font-size: 12px; }
-        .concept-copy { flex: 1; min-width: 0; }
-        .concept-copy strong, .concept-copy small { display: block; }
-        .concept-copy strong { font-size: 12px; }
-        .concept-copy small { color: var(--muted); font-size: 10px; line-height: 1.5; margin-top: 5px; }
-        .concept-check { color: #bd8aff; }
-        .result-panel { margin-top: 20px; }
-        .generated-image { display: block; width: 100%; max-width: 850px; aspect-ratio: 16 / 9; object-fit: contain; background: #08070d; border-radius: 10px; margin-bottom: 18px; }
+        .upload-symbol {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          background: #593783;
+          color: white;
+          font-size: 22px;
+        }
 
-        .caption-panel { max-width: 760px; }
-        .caption-results { margin-top: 20px; }
-        .caption-row { display: grid; grid-template-columns: 130px 1fr; gap: 12px; align-items: start; margin: 12px 0; }
-        .caption-time { color: #bd8aff; font-size: 10px; padding-top: 12px; }
-        .caption-edit { min-height: 50px; }
-        .export-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
-        .small-note { color: var(--muted); font-size: 10px; line-height: 1.6; margin-top: 16px; }
-        .footer { padding: 20px 40px; display: flex; justify-content: space-between; color: var(--muted); border-top: 1px solid var(--line); font-size: 10px; }
+        .dropzone strong {
+          font-size: 12px;
+        }
+
+        .dropzone small {
+          color: var(--muted);
+          font-size: 10px;
+        }
+
+        .field-label {
+          display: block;
+          margin: 19px 0 8px;
+          color: var(--muted);
+          font-size: 11px;
+        }
+
+        .text-field {
+          display: block;
+          width: 100%;
+          padding: 12px;
+          color: var(--text);
+          background: var(--panel2);
+          border: 1px solid var(--line);
+          border-radius: 8px;
+          outline: none;
+          font-size: 12px;
+          resize: vertical;
+        }
+
+        .text-field:focus {
+          border-color: #a66bff;
+        }
+
+        .full {
+          width: 100%;
+          margin-top: 15px;
+        }
+
+        .status {
+          margin-top: 14px;
+          padding: 11px;
+          border-radius: 8px;
+          background: var(--panel2);
+          color: #c8a6ff;
+          font-size: 11px;
+          line-height: 1.6;
+          overflow-wrap: anywhere;
+        }
+
+        .progress-track {
+          width: 100%;
+          height: 8px;
+          background: var(--panel2);
+          border-radius: 20px;
+          overflow: hidden;
+          margin-top: 12px;
+        }
+
+        .progress-fill {
+          height: 100%;
+          background: #8b5cf6;
+          transition: width 0.3s ease;
+        }
+
+        .empty-state {
+          min-height: 230px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+        }
+
+        .empty-state > span {
+          color: #bd8aff;
+          font-size: 35px;
+        }
+
+        .empty-state h3,
+        .empty-state h2 {
+          font-size: 16px;
+        }
+
+        .empty-state p {
+          color: var(--muted);
+          font-size: 12px;
+          line-height: 1.7;
+        }
+
+        .concept-list {
+          display: grid;
+          gap: 9px;
+          margin-bottom: 15px;
+        }
+
+        .concept {
+          display: flex;
+          gap: 12px;
+          align-items: center;
+          width: 100%;
+          text-align: left;
+          padding: 13px;
+          border-radius: 9px;
+          border: 1px solid var(--line);
+          background: var(--panel2);
+          color: var(--text);
+        }
+
+        .concept-active {
+          border-color: #a66bff;
+          background: #38244f;
+        }
+
+        .concept-number {
+          color: #bd8aff;
+          font-size: 12px;
+        }
+
+        .concept-copy {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .concept-copy strong,
+        .concept-copy small {
+          display: block;
+        }
+
+        .concept-copy strong {
+          font-size: 12px;
+        }
+
+        .concept-copy small {
+          color: var(--muted);
+          font-size: 10px;
+          line-height: 1.5;
+          margin-top: 5px;
+        }
+
+        .concept-check {
+          color: #bd8aff;
+        }
+
+        .result-panel {
+          margin-top: 20px;
+        }
+
+        .generated-image {
+          display: block;
+          width: 100%;
+          max-width: 850px;
+          aspect-ratio: 16 / 9;
+          object-fit: contain;
+          background: #08070d;
+          border-radius: 10px;
+          margin-bottom: 18px;
+        }
+
+        .caption-panel {
+          max-width: 760px;
+        }
+
+        .caption-results {
+          margin-top: 20px;
+        }
+
+        .caption-row {
+          display: grid;
+          grid-template-columns: 130px 1fr;
+          gap: 12px;
+          align-items: start;
+          margin: 12px 0;
+        }
+
+        .caption-time {
+          color: #bd8aff;
+          font-size: 10px;
+          padding-top: 12px;
+        }
+
+        .caption-edit {
+          min-height: 50px;
+        }
+
+        .export-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-top: 20px;
+        }
+
+        .small-note {
+          color: var(--muted);
+          font-size: 10px;
+          line-height: 1.6;
+          margin-top: 16px;
+        }
+
+        .footer {
+          padding: 20px 40px;
+          display: flex;
+          justify-content: space-between;
+          color: var(--muted);
+          border-top: 1px solid var(--line);
+          font-size: 10px;
+        }
 
         @media (max-width: 950px) {
-          .sidebar { width: 210px; min-width: 210px; }
-          .page { padding: 28px 22px; }
-          .stats { grid-template-columns: repeat(2, 1fr); }
-          .tools { grid-template-columns: 1fr 1fr; }
-          .studio-grid { grid-template-columns: 1fr; }
+          .sidebar {
+            width: 210px;
+            min-width: 210px;
+          }
+
+          .page {
+            padding: 28px 22px;
+          }
+
+          .stats {
+            grid-template-columns: repeat(2, 1fr);
+          }
+
+          .tools {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .studio-grid {
+            grid-template-columns: 1fr;
+          }
         }
 
         @media (max-width: 650px) {
-          .app { display: block; }
-          .sidebar { width: 100%; min-width: 0; min-height: auto; padding: 12px; border-right: 0; border-bottom: 1px solid var(--line); }
-          .brand { margin: 3px 6px 12px; }
-          .nav-label, .sidebar-bottom, .sidebar-note { display: none; }
-          .sidebar > .nav-item { display: inline-flex; width: auto; margin: 2px; padding: 9px; font-size: 10px; }
-          .topbar { height: auto; min-height: 55px; padding: 10px 14px; gap: 10px; }
-          .online-label { display: none; }
-          .page { padding: 20px 14px 30px; }
-          .hero { padding: 25px 20px; min-height: 230px; }
-          .hero-art { width: 100px; transform: scale(.7); margin-right: -20px; }
-          .hero h1 { font-size: 30px; }
-          .stats { gap: 9px; margin: 15px 0 25px; }
-          .stat { padding: 13px; }
-          .tools, .seo-grid { grid-template-columns: 1fr; }
-          .heading { align-items: flex-start; flex-direction: column; }
-          .heading h1 { font-size: 29px; }
-          .panel { padding: 17px; }
-          .caption-row { grid-template-columns: 1fr; gap: 5px; }
-          .footer { padding: 16px; }
+          .app {
+            display: block;
+          }
+
+          .sidebar {
+            width: 100%;
+            min-width: 0;
+            min-height: auto;
+            padding: 12px;
+            border-right: 0;
+            border-bottom: 1px solid var(--line);
+          }
+
+          .brand {
+            margin: 3px 6px 12px;
+          }
+
+          .nav-label,
+          .sidebar-bottom,
+          .sidebar-note {
+            display: none;
+          }
+
+          .sidebar > .nav-item {
+            display: inline-flex;
+            width: auto;
+            margin: 2px;
+            padding: 9px;
+            font-size: 10px;
+          }
+
+          .topbar {
+            height: auto;
+            min-height: 55px;
+            padding: 10px 14px;
+            gap: 10px;
+          }
+
+          .online-label {
+            display: none;
+          }
+
+          .page {
+            padding: 20px 14px 30px;
+          }
+
+          .hero {
+            padding: 25px 20px;
+            min-height: 230px;
+          }
+
+          .hero-art {
+            width: 100px;
+            transform: scale(0.7);
+            margin-right: -20px;
+          }
+
+          .hero h1 {
+            font-size: 30px;
+          }
+
+          .stats {
+            gap: 9px;
+            margin: 15px 0 25px;
+          }
+
+          .stat {
+            padding: 13px;
+          }
+
+          .tools,
+          .seo-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .heading {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .heading h1 {
+            font-size: 29px;
+          }
+
+          .panel {
+            padding: 17px;
+          }
+
+          .caption-row {
+            grid-template-columns: 1fr;
+            gap: 5px;
+          }
+
+          .footer {
+            padding: 16px;
+          }
         }
       `}</style>
     </main>
