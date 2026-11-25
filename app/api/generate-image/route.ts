@@ -4,6 +4,17 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const FORMATS: Record<
+  string,
+  { width: number; height: number; label: string }
+> = {
+  "16:9": { width: 1536, height: 864, label: "landscape 16:9" },
+  "9:16": { width: 864, height: 1536, label: "portrait 9:16" },
+  "1:1": { width: 1024, height: 1024, label: "square 1:1" },
+  "4:5": { width: 1024, height: 1280, label: "portrait 4:5" },
+  "4:3": { width: 1280, height: 960, label: "landscape 4:3" },
+};
+
 export async function POST(request: Request) {
   try {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -20,6 +31,7 @@ export async function POST(request: Request) {
 
     const prompt = String(body.prompt || "").trim();
     const description = String(body.description || "").trim();
+    const aspectRatio = String(body.aspectRatio || "16:9");
 
     if (!prompt && !description) {
       return NextResponse.json(
@@ -28,30 +40,41 @@ export async function POST(request: Request) {
       );
     }
 
+    const selectedFormat = FORMATS[aspectRatio];
+
+    if (!selectedFormat) {
+      return NextResponse.json(
+        { error: "Invalid image format selected." },
+        { status: 400 }
+      );
+    }
+
     const finalPrompt = `
-Create a professional, highly clickable YouTube thumbnail.
-Landscape widescreen 16:9 composition.
+Create a professional, highly clickable thumbnail image.
+Exact composition: ${selectedFormat.label}.
+Image dimensions: ${selectedFormat.width}x${selectedFormat.height}.
 Video context: ${description}
 Creative direction: ${prompt}
 Use cinematic lighting, vivid colors, strong emotion,
 a large recognizable main subject and sharp details.
-Make the composition suitable for a YouTube thumbnail.
-No watermark, no collage.
+Fill the entire canvas with a well-composed image.
+No watermark, no collage, no borders.
     `.trim().slice(0, 2048);
 
+    const formData = new FormData();
+    formData.append("prompt", finalPrompt);
+    formData.append("width", String(selectedFormat.width));
+    formData.append("height", String(selectedFormat.height));
+
     const apiUrl =
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell`;
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-2-klein-4b`;
 
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        prompt: finalPrompt,
-        steps: 4,
-      }),
+      body: formData,
       cache: "no-store",
       signal: AbortSignal.timeout(50000),
     });
@@ -83,6 +106,9 @@ No watermark, no collage.
       imageUrl,
       image: imageUrl,
       mimeType: "image/jpeg",
+      aspectRatio,
+      width: selectedFormat.width,
+      height: selectedFormat.height,
       message: "Thumbnail generated successfully.",
     });
 
@@ -99,4 +125,4 @@ No watermark, no collage.
       { status: 500 }
     );
   }
-          }
+}
