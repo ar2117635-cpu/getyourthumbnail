@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -17,7 +18,6 @@ const FORMATS: Record<
 function getImageDimensions(base64: string) {
   const bytes = Buffer.from(base64, "base64");
 
-  // PNG dimensions
   if (
     bytes.length >= 24 &&
     bytes[0] === 0x89 &&
@@ -31,11 +31,10 @@ function getImageDimensions(base64: string) {
     };
   }
 
-  // JPEG dimensions
   if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
     let offset = 2;
 
-    while (offset < bytes.length) {
+    while (offset < bytes.length - 4) {
       if (bytes[offset] !== 0xff) {
         offset++;
         continue;
@@ -73,7 +72,10 @@ export async function POST(request: Request) {
 
     if (!accountId || !apiToken) {
       return NextResponse.json(
-        { success: false, error: "Cloudflare Account ID or API Token is missing." },
+        {
+          success: false,
+          error: "Cloudflare Account ID or API Token is missing.",
+        },
         { status: 500 }
       );
     }
@@ -101,11 +103,11 @@ export async function POST(request: Request) {
     }
 
     const finalPrompt = `
-Create one professional, highly clickable YouTube-style thumbnail.
-The required image format is ${selectedFormat.label}.
-The canvas MUST be landscape or portrait according to the requested dimensions.
-Do not create a square composition unless the selected format is 1:1.
-Use the full canvas. Do not add borders, frames, or empty margins.
+Create one professional, highly clickable thumbnail.
+Required image format: ${selectedFormat.label}.
+Follow the requested width and height.
+Do not create a square composition unless 1:1 is selected.
+Use the full canvas without borders or empty margins.
 Video context: ${description}
 Creative direction: ${prompt}
 Use cinematic lighting, vivid colors, strong emotion,
@@ -130,7 +132,11 @@ No watermark. No collage.
       cache: "no-store",
       signal: AbortSignal.timeout(50000),
     });
-        if (!response.ok || !data.success) {
+
+    // Response ko yahin read karna zaroori hai.
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
       console.error("Cloudflare API error:", data);
 
       return NextResponse.json(
@@ -187,7 +193,6 @@ No watermark. No collage.
       height: dimensions?.height || selectedFormat.height,
       message: "Thumbnail generated successfully.",
     });
-
   } catch (error) {
     console.error("Cloudflare image generation error:", error);
 
@@ -203,5 +208,3 @@ No watermark. No collage.
     );
   }
 }
-
-    const data = await response.json();
