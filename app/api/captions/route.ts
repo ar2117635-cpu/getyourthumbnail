@@ -1,174 +1,194 @@
 
-import { NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
-import { writeFile, unlink } from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
-import crypto from "node:crypto";
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-export async function POST(request: Request) {
-  let tempPath = "";
+const MODEL = "gemini-3.8-flash";
 
+export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "GEMINI_API_KEY is missing in Vercel." },
+        { error: "GEMINI_API_KEY is missing." },
         { status: 500 }
       );
     }
 
-    const form = await request.formData();
-    const file = form.get("video");
-    const language = String(form.get("language") || "auto");
+    const body = await request.json();
 
-    if (!(file instanceof File)) {
+    const fileName =
+      typeof body.fileName === "string" ? body.fileName : "";
+
+    const language =
+      typeof body.language === "string" ? body.language : "Hindi";
+
+    if (!/^files\/[a-z0-9-]+$/i.test(fileName)) {
       return NextResponse.json(
-        { error: "Please upload a video." },
+        { error: "Invalid Gemini file name." },
         { status: 400 }
       );
     }
 
-    if (!file.type.startsWith("video/")) {
-      return NextResponse.json(
-        { error: "Invalid video format." },
-        { status: 400 }
+    const baseUrl = "https://generativelanguage.googleapis.com/v1beta";
+
+    // Check video processing status.
+    let fileData: any = null;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const fileResponse = await fetch(
+        `${baseUrl}/${fileName}`,
+        {
+          headers: {
+            "x-goog-api-key": apiKey,
+          },
+          cache: "no-store",
+        }
       );
+
+      if (!fileResponse.ok) {
+        const errorText = await fileResponse.text();
+        throw new Error(errorText.slice(0, 1000));
+      }
+
+      fileData = await fileResponse.json();
+
+      if (fileData.state === "ACTIVE") {
+        break;
+      }
+
+      if (fileData.state === "FAILED") {
+        throw new Error("Gemini could not process this video.");
+      }
+
+      if (attempt === 9) {
+        throw new Error(
+          "Video is still processing. Please try again shortly."
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
 
-    if (file.size > 4 * 1024 * 1024) {
-      return NextResponse.json(
-        { error: "For this Vercel MVP, please use a video under 4 MB." },
-        { status: 413 }
-      );
-    }
-
-    const bytes = Buffer.from(await file.arrayBuffer());
-    tempPath = path.join(
-      os.tmpdir(),
-      `${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`
-    );
-
-    await writeFile(tempPath, bytes);
-
-    const ai = new GoogleGenAI({ apiKey });
-
-    const uploaded = await ai.files.upload({
-      file: tempPath,
-      config: { mimeType: file.type },
-    });
-
-    if (!uploaded.uri) {
-      throw new Error("Gemini could not upload this video.");
-    }
-
-    let state = uploaded.state;
-
-    for (let i = 0; state === "PROCESSING" && i < 20; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      const current = await ai.files.get({ name: uploaded.name! });
-      state = current.state;
-    }
-
-    if (state !== "ACTIVE") {
-      throw new Error("Video processing is not ready. Please try again.");
+    if (!fileData?.uri || !fileData?.mimeType) {
+      throw new Error("Gemini video file information is missing.");
     }
 
     const prompt = `
-Transcribe all spoken dialogue in this video.
+You are an expert video transcription and subtitle generator.
 
-Language preference: ${language === "auto" ? "Automatically detect the spoken language" : language}.
+Watch and listen to the complete uploaded video.
 
-Return ONLY valid JSON in this exact structure:
+Generate accurate subtitles in ${language}.
+Preserve the spoken words as closely as possible.
+Do not invent dialogue.
+If there is no speech, return an empty captions array.
+
+Return ONLY valid JSON in this exact format:
+
 {
   "captions": [
     {
-      "start": 0.0,
-      "end": 2.5,
+      "start": 0,
+      "end": 3.5,
       "text": "Spoken words here"
     }
   ]
 }
 
 Rules:
-- Include only words actually spoken.
-- Preserve the original spoken language.
-- Divide speech into short readable subtitle segments.
-- Use seconds for start and end timestamps.
+- start and end must be seconds as numbers.
+- Each caption should be short and readable.
 - Keep timestamps in chronological order.
-- Estimate timing carefully from the audio.
-- Do not invent dialogue.
-- Do not include explanations or Markdown.
+- Do not include Markdown or explanations.
 `;
 
-    const result = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              fileData: {
-                fileUri: uploaded.uri,
-                mimeType: uploaded.mimeType || file.type,
-              },
-            },
-            { text: prompt },
-          ],
+    const generateResponse = await fetch(
+      `${baseUrl}/models/${MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
         },
-      ],
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt,
+                },
+                {
+                  file_data: {
+                    mime_type: fileData.mimeType,
+                    file_uri: fileData.uri,
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.2,
+          },
+        }),
+      }
+    );
 
-    const raw = result.text || "";
-    const parsed = JSON.parse(raw);
-    const captions = parsed.captions;
+    const result = await generateResponse.json();
 
-    if (!Array.isArray(captions) || captions.length === 0) {
-      throw new Error("No speech captions were detected.");
+    if (!generateResponse.ok) {
+      throw new Error(
+        result.error?.message || "Gemini caption generation failed."
+      );
     }
 
-    const clean = captions
+    const output = result.candidates?.[0]?.content?.parts
+      ?.map((part: any) => part.text || "")
+      .join("")
+      .trim();
+
+    if (!output) {
+      throw new Error("Gemini returned an empty response.");
+    }
+
+    const parsed = JSON.parse(output);
+
+    if (!Array.isArray(parsed.captions)) {
+      throw new Error("Invalid captions format returned by Gemini.");
+    }
+
+    const captions = parsed.captions
       .filter(
-        (c: any) =>
-          typeof c.text === "string" &&
-          Number.isFinite(Number(c.start)) &&
-          Number.isFinite(Number(c.end)) &&
-          Number(c.end) > Number(c.start)
+        (item: any) =>
+          typeof item.start === "number" &&
+          typeof item.end === "number" &&
+          typeof item.text === "string" &&
+          item.end > item.start
       )
-      .map((c: any) => ({
-        start: Number(c.start),
-        end: Number(c.end),
-        text: c.text.trim(),
-      }))
-      .filter((c: any) => c.text.length > 0);
+      .map((item: any) => ({
+        start: item.start,
+        end: item.end,
+        text: item.text,
+      }));
 
-    if (clean.length === 0) {
-      throw new Error("No valid caption segments were returned.");
-    }
-
-    return NextResponse.json({ captions: clean });
+    return NextResponse.json({
+      success: true,
+      captions,
+    });
   } catch (error) {
-    console.error("Caption API error:", error);
+    console.error("Caption generation error:", error);
 
     return NextResponse.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "Caption generation failed.",
+            : "Something went wrong.",
       },
       { status: 500 }
     );
-  } finally {
-    if (tempPath) {
-      await unlink(tempPath).catch(() => {});
-    }
   }
 }
