@@ -65,6 +65,7 @@ export default function Home() {
 
   const [thumbFile, setThumbFile] = useState<File | null>(null);
   const [thumbDescription, setThumbDescription] = useState("");
+  const [thumbAspectRatio, setThumbAspectRatio] = useState("16:9");
   const [thumbLoading, setThumbLoading] = useState(false);
   const [thumbStatus, setThumbStatus] = useState("");
   const [concepts, setConcepts] = useState<Concept[]>([]);
@@ -245,6 +246,7 @@ export default function Home() {
         body: JSON.stringify({
           prompt: concept.prompt,
           description: thumbDescription,
+          aspectRatio: thumbAspectRatio,
         }),
       });
 
@@ -341,7 +343,7 @@ export default function Home() {
 
     const link = document.createElement("a");
     link.href = generatedImage;
-    link.download = "getyourthumbnail.jpg";
+    link.download = `getyourthumbnail-${thumbAspectRatio.replace(":", "x")}.jpg`;
     link.click();
   }
 
@@ -478,8 +480,7 @@ export default function Home() {
               </div>
               <span className="ready">● AI WORKFLOW</span>
             </div>
-
-            <div className="studio-grid">
+                        <div className="studio-grid">
               <section className="panel">
                 <div className="panel-heading">
                   <b>01</b>
@@ -493,6 +494,20 @@ export default function Home() {
                   <small>MP4 · MOV · WEBM</small>
                   <small>Frame analysis happens in your browser.</small>
                 </label>
+
+                <label className="field-label" htmlFor="thumbnail-format">Thumbnail format</label>
+                <select
+                  id="thumbnail-format"
+                  className="text-field"
+                  value={thumbAspectRatio}
+                  onChange={(e) => setThumbAspectRatio(e.target.value)}
+                >
+                  <option value="16:9">16:9 — YouTube Thumbnail (1536 × 864)</option>
+                  <option value="9:16">9:16 — Shorts / Reels (864 × 1536)</option>
+                  <option value="1:1">1:1 — Square Post (1024 × 1024)</option>
+                  <option value="4:5">4:5 — Instagram Portrait (1024 × 1280)</option>
+                  <option value="4:3">4:3 — Classic Thumbnail (1280 × 960)</option>
+                </select>
 
                 <label className="field-label">Video context (optional)</label>
                 <textarea
@@ -557,7 +572,12 @@ export default function Home() {
                   <b>03</b>
                   <div><h3>Your generated thumbnail</h3><p>Review and download your result.</p></div>
                 </div>
-                <img className="generated-image" src={generatedImage} alt="Generated YouTube thumbnail" />
+                <img
+                  className="generated-image"
+                  src={generatedImage}
+                  alt={`Generated ${thumbAspectRatio} thumbnail`}
+                  style={{ aspectRatio: thumbAspectRatio.replace(":", " / ") }}
+                />
                 <button className="primary" onClick={downloadThumbnail}>↓ Download thumbnail</button>
               </section>
             )}
