@@ -95,58 +95,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check Gemini video processing status.
-    let fileData: any = null;
-    let isActive = false;
-
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const fileResponse = await fetch(
-        `${BASE_URL}/${fileName}`,
-        {
-          headers: {
-            "x-goog-api-key": apiKey,
-          },
-          cache: "no-store",
-        }
-      );
-
-      if (!fileResponse.ok) {
-        const errorText = await fileResponse.text();
-
-        return NextResponse.json(
-          {
-            error:
-              `Gemini file check failed: ${errorText.slice(0, 500)}`,
-          },
-          { status: fileResponse.status }
-        );
+   
+    // Check Gemini video processing status without blocking the function.
+    const fileResponse = await fetch(
+      `${BASE_URL}/${fileName}`,
+      {
+        headers: {
+          "x-goog-api-key": apiKey,
+        },
+        cache: "no-store",
       }
+    );
 
-      fileData = await fileResponse.json();
+    if (!fileResponse.ok) {
+      const errorText = await fileResponse.text();
 
-      if (fileData.state === "ACTIVE") {
-        isActive = true;
-        break;
-      }
-
-      if (fileData.state === "FAILED") {
-        throw new Error("Gemini could not process this video.");
-      }
-
-      if (attempt < 9) {
-        await sleep(3000);
-      }
-    }
-
-    if (!isActive) {
       return NextResponse.json(
         {
-          error:
-            "Video is still processing. Please try again shortly.",
+          error: `Gemini file check failed: ${errorText.slice(0, 500)}`,
+        },
+        { status: fileResponse.status }
+      );
+    }
+
+    const fileData = await fileResponse.json();
+
+    if (fileData.state === "FAILED") {
+      throw new Error("Gemini could not process this video.");
+    }
+
+    if (fileData.state !== "ACTIVE") {
+      return NextResponse.json(
+        {
+          error: "Video is still processing. Please wait.",
+          retryAfterSeconds: 3,
         },
         { status: 503 }
       );
     }
+
 
     if (!fileData?.uri || !fileData?.mimeType) {
       throw new Error("Gemini video file information is missing.");
