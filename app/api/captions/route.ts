@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
           error:
             "Video is still processing. Please try again shortly.",
         },
-        { status: 202 }
+        { status: 503 }
       );
     }
 
