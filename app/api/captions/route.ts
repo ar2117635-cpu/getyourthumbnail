@@ -5,6 +5,69 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MODEL = "gemini-3.8-flash";
+const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+
+const sleep = (ms: number) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+async function generateWithRetry(
+  url: string,
+  apiKey: string,
+  payload: object
+) {
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+
+    const responseText = await response.text();
+
+    let result: any;
+
+    try {
+      result = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      result = {};
+    }
+
+    if (response.ok) {
+      return result;
+    }
+
+    const retryable = [429, 500, 502, 503, 504].includes(
+      response.status
+    );
+
+    if (!retryable || attempt === maxAttempts) {
+      const error: any = new Error(
+        result.error?.message ||
+          `Gemini request failed with status ${response.status}.`
+      );
+
+      error.status = response.status;
+      throw error;
+    }
+
+    const retryAfter = Number(response.headers.get("retry-after"));
+
+    const delay =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 4000)
+        : attempt * 1500;
+
+    await sleep(delay);
+  }
+
+  throw new Error("Gemini request failed after retries.");
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,14 +95,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const baseUrl = "https://generativelanguage.googleapis.com/v1beta";
-
-    // Check video processing status.
+    // Check Gemini video processing status.
     let fileData: any = null;
+    let isActive = false;
 
     for (let attempt = 0; attempt < 10; attempt++) {
       const fileResponse = await fetch(
-        `${baseUrl}/${fileName}`,
+        `${BASE_URL}/${fileName}`,
         {
           headers: {
             "x-goog-api-key": apiKey,
@@ -50,12 +112,20 @@ export async function POST(request: NextRequest) {
 
       if (!fileResponse.ok) {
         const errorText = await fileResponse.text();
-        throw new Error(errorText.slice(0, 1000));
+
+        return NextResponse.json(
+          {
+            error:
+              `Gemini file check failed: ${errorText.slice(0, 500)}`,
+          },
+          { status: fileResponse.status }
+        );
       }
 
       fileData = await fileResponse.json();
 
       if (fileData.state === "ACTIVE") {
+        isActive = true;
         break;
       }
 
@@ -63,13 +133,19 @@ export async function POST(request: NextRequest) {
         throw new Error("Gemini could not process this video.");
       }
 
-      if (attempt === 9) {
-        throw new Error(
-          "Video is still processing. Please try again shortly."
-        );
+      if (attempt < 9) {
+        await sleep(3000);
       }
+    }
 
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+    if (!isActive) {
+      return NextResponse.json(
+        {
+          error:
+            "Video is still processing. Please try again shortly.",
+        },
+        { status: 202 }
+      );
     }
 
     if (!fileData?.uri || !fileData?.mimeType) {
@@ -105,45 +181,29 @@ Rules:
 - Do not include Markdown or explanations.
 `;
 
-    const generateResponse = await fetch(
-      `${baseUrl}/models/${MODEL}:generateContent`,
+    const result = await generateWithRetry(
+      `${BASE_URL}/models/${MODEL}:generateContent`,
+      apiKey,
       {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt,
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                file_data: {
+                  mime_type: fileData.mimeType,
+                  file_uri: fileData.uri,
                 },
-                {
-                  file_data: {
-                    mime_type: fileData.mimeType,
-                    file_uri: fileData.uri,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.2,
+              },
+            ],
           },
-        }),
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
       }
     );
-
-    const result = await generateResponse.json();
-
-    if (!generateResponse.ok) {
-      throw new Error(
-        result.error?.message || "Gemini caption generation failed."
-      );
-    }
 
     const output = result.candidates?.[0]?.content?.parts
       ?.map((part: any) => part.text || "")
@@ -151,7 +211,11 @@ Rules:
       .trim();
 
     if (!output) {
-      throw new Error("Gemini returned an empty response.");
+      throw new Error(
+        result.promptFeedback?.blockReason
+          ? `Gemini blocked the request: ${result.promptFeedback.blockReason}`
+          : "Gemini returned an empty response."
+      );
     }
 
     const parsed = JSON.parse(output);
@@ -181,6 +245,14 @@ Rules:
   } catch (error) {
     console.error("Caption generation error:", error);
 
+    const status =
+      typeof error === "object" &&
+      error !== null &&
+      "status" in error &&
+      typeof error.status === "number"
+        ? error.status
+        : 500;
+
     return NextResponse.json(
       {
         error:
@@ -188,7 +260,7 @@ Rules:
             ? error.message
             : "Something went wrong.",
       },
-      { status: 500 }
+      { status }
     );
   }
 }
