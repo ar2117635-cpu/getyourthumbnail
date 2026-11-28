@@ -273,79 +273,48 @@ export default function Home() {
     }
   }
 
-  async function generateCaptions() {
-    if (!captionFile) return;
+      let data: any;
+      let captionResponse: Response | undefined;
 
-    setCaptionLoading(true);
-    setCaptionProgress(0);
-    setCaptionStatus("Creating secure upload session...");
-
-    try {
-      const sessionResponse = await fetch(
-        "/api/captions/upload-session",
-        {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        captionResponse = await fetch("/api/captions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            fileName: captionFile.name,
-            mimeType: captionFile.type,
-            fileSize: captionFile.size,
+            fileName,
+            language: captionLanguage,
           }),
+        });
+
+        data = await readApiResponse(captionResponse);
+
+        if (captionResponse.ok) {
+          break;
         }
-      );
 
-      const sessionData = await readApiResponse(sessionResponse);
+        if (data.retryAfterSeconds !== 3) {
+          throw new Error(data.error || "Caption generation failed.");
+        }
 
-      if (!sessionResponse.ok || !sessionData.uploadUrl) {
-        throw new Error(
-          sessionData.error || "Could not create upload session."
+        if (attempt === 29) {
+          throw new Error(
+            "Video is taking too long to process. Please try again."
+          );
+        }
+
+        setCaptionStatus(
+          `Video is still processing. Retrying in 3 seconds (${attempt + 1}/30)...`
         );
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
 
-      setCaptionStatus("Uploading video directly to Gemini...");
-
-      const uploadResponse = await fetch(sessionData.uploadUrl, {
-        method: "POST",
-        headers: {
-          "Content-Length": String(captionFile.size),
-          "X-Goog-Upload-Offset": "0",
-          "X-Goog-Upload-Command": "upload, finalize",
-        },
-        body: captionFile,
-      });
-
-      const uploadData = await readApiResponse(uploadResponse);
-
-      if (!uploadResponse.ok) {
-        throw new Error(
-          uploadData.error?.message || "Video upload failed."
-        );
+      if (!captionResponse?.ok) {
+        throw new Error(data?.error || "Caption generation failed.");
       }
-
-      const fileName = uploadData.file?.name;
-
-      if (!fileName) {
-        throw new Error("Gemini did not return the uploaded file name.");
-      }
-
-      setCaptionProgress(100);
-      setCaptionStatus("Video uploaded. Generating captions...");
-
-      const captionResponse = await fetch("/api/captions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          fileName,
-          language: captionLanguage,
-        }),
-      });
-
-      const data = await readApiResponse(captionResponse);
-
+  
       if (!captionResponse.ok) {
         throw new Error(data.error || "Caption generation failed.");
       }
